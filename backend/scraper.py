@@ -411,7 +411,7 @@ async def scrape_linkedin(page, rate_limiter, location_cfg: dict | None = None, 
 
                     # Location
                     location_el = await card.query_selector(
-                        "span.job-search-card__location, .job-search-card__location, .base-search-card__metadata, span"
+                        "span.job-search-card__location, .job-search-card__location, .base-search-card__metadata-item"
                     )
                     loc = (
                         (await location_el.inner_text()).strip() if location_el else ""
