@@ -724,7 +724,7 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Status Chips Filter Row */}
+                 {/* Status Chips Filter Row */}
                 <div className="deck-status-chips">
                   <button 
                     className={`status-chip-btn ${statusFilter === 'all' ? 'active' : ''}`}
@@ -732,6 +732,14 @@ export default function App() {
                   >
                     <span className="chip-count">{stats.total || 0}</span>
                     <span className="chip-label">Jobs</span>
+                  </button>
+
+                  <button 
+                    className={`status-chip-btn ${statusFilter === 'new' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('new')}
+                  >
+                    <span className="chip-count">{stats.new || 0}</span>
+                    <span className="chip-label">New</span>
                   </button>
 
                   <button 
@@ -751,11 +759,35 @@ export default function App() {
                   </button>
 
                   <button 
+                    className={`status-chip-btn ${statusFilter === 'interview' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('interview')}
+                  >
+                    <span className="chip-count">{stats.interview || 0}</span>
+                    <span className="chip-label">Interview</span>
+                  </button>
+
+                  <button 
+                    className={`status-chip-btn ${statusFilter === 'offer' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('offer')}
+                  >
+                    <span className="chip-count">{stats.offer || 0}</span>
+                    <span className="chip-label">Offer</span>
+                  </button>
+
+                  <button 
                     className={`status-chip-btn ${statusFilter === 'rejected' ? 'active' : ''}`}
                     onClick={() => handleFilterChange('rejected')}
                   >
                     <span className="chip-count">{stats.rejected || 0}</span>
                     <span className="chip-label">Denied</span>
+                  </button>
+
+                  <button 
+                    className={`status-chip-btn ${statusFilter === 'ghosted' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('ghosted')}
+                  >
+                    <span className="chip-count">{stats.ghosted || 0}</span>
+                    <span className="chip-label">Ghosted</span>
                   </button>
                 </div>
               </div>

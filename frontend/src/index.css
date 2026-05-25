@@ -4112,7 +4112,7 @@ ul, ol { list-style: none; }
 .deck-status-chips {
   display: flex;
   gap: 10px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .status-chip-btn {
