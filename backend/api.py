@@ -1629,7 +1629,9 @@ async def tailor_resume_docx(
     buf.seek(0)
 
     safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', file.filename.rsplit('.', 1)[0])
-    download_name = f"{safe_name}_ATS_Optimized.docx"
+    company_name = job["company"] if (job and job["company"]) else "Optimized"
+    safe_company = re.sub(r'[^a-zA-Z0-9_\-]', '_', company_name.strip())
+    download_name = f"{safe_name}_{safe_company}.docx"
 
     return StreamingResponse(
         buf,
