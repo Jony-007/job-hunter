@@ -68,7 +68,7 @@ echo.
 
 REM ─── Start API server (includes watchdog) ───
 echo  🖥  Starting API server on localhost:8000...
-start "JobHunter API" cmd /k "cd /d %~dp0backend && python -m uvicorn api:app --host 0.0.0.0 --port 8000 --log-level info"
+start "JobHunter API" cmd /k "cd /d %~dp0backend && python -m uvicorn api:app --host 0.0.0.0 --port 8000 --reload --log-level info"
 
 REM ─── Wait for API to be ready ───────────────
 echo  ⏳ Waiting for API to initialize...
