@@ -1,0 +1,39 @@
+# Backend - runtime data
+backend/cookies.json
+backend/jobs.db
+backend/jobs.db-wal
+backend/jobs.db-shm
+backend/scraper.log
+backend/scraper.log.*
+backend/scraper.lock
+backend/scrape.trigger
+backend/.env
+
+# Frontend - build output
+frontend/node_modules/
+frontend/dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+.env.local
+.env.*.local
