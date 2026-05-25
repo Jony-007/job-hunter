@@ -1628,8 +1628,19 @@ async def tailor_resume_docx(
     doc.save(buf)
     buf.seek(0)
 
+    # Fetch company name for download filename
+    try:
+        from database import _get_db
+        db_conn = await _get_db()
+        try:
+            job_row = await db_conn.fetchrow("SELECT company FROM jobs WHERE id = $1", job_id)
+            company_name = job_row["company"] if (job_row and job_row["company"]) else "Optimized"
+        finally:
+            await db_conn.close()
+    except Exception:
+        company_name = "Optimized"
+
     safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', file.filename.rsplit('.', 1)[0])
-    company_name = job["company"] if (job and job["company"]) else "Optimized"
     safe_company = re.sub(r'[^a-zA-Z0-9_\-]', '_', company_name.strip())
     download_name = f"{safe_name}_{safe_company}.docx"
 
