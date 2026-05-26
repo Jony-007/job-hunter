@@ -100,6 +100,13 @@ async def get_current_user(request: Request, credentials: HTTPAuthorizationCrede
 # Logging
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
+# Add a file handler for the root logger to catch everything including uvicorn logs in a file
+root_logger = logging.getLogger()
+log_dir = os.path.dirname(__file__)
+file_handler = logging.FileHandler(os.path.join(log_dir, "api_error.log"), encoding="utf-8")
+file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"))
+root_logger.addHandler(file_handler)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
@@ -123,6 +130,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def log_exceptions_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        import traceback
+        logger.error("UNHANDLED EXCEPTION IN API ROUTE %s: %s", request.url.path, exc)
+        logger.error(traceback.format_exc())
+        raise exc
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -475,6 +493,7 @@ async def list_jobs(
     offset: int = Query(0, ge=0, description="Pagination offset"),
     search: Optional[str] = Query(None, description="Full-text search term"),
     active_only: bool = Query(True, description="Only return active (non-deleted) jobs"),
+    sort_by: Optional[str] = Query(None, description="Sort order: 'match' or 'date'"),
     user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Return a paginated list of jobs with optional filters."""
@@ -488,7 +507,7 @@ async def list_jobs(
         )
 
     try:
-        result = await get_all_jobs(status, limit, offset, search, active_only, user_id=user_id)
+        result = await get_all_jobs(status, limit, offset, search, active_only, user_id=user_id, sort_by=sort_by)
     except Exception as exc:
         logger.exception("Failed to fetch jobs")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -581,10 +600,23 @@ TRIGGER_PATH: str = os.path.join(os.path.dirname(__file__), "scrape.trigger")
 async def trigger_scrape(body: Optional[ScrapeTriggerRequest] = None, user: dict = Depends(get_current_user)) -> Dict[str, str]:
     """Write a signal file so the scraper picks up a run request with custom parameters."""
     try:
+        q = body.query if body else None
+        loc = body.location if body else None
+        
+        # Load user defaults if parameters are omitted or blank
+        if not q or not loc:
+            from database import get_user
+            user_data = await get_user(user["sub"])
+            if user_data:
+                if not q and user_data.get("default_query"):
+                    q = user_data["default_query"]
+                if not loc and user_data.get("default_location"):
+                    loc = user_data["default_location"]
+                    
         data = {
             "triggered_at": datetime.now(timezone.utc).isoformat(),
-            "query": body.query if body else None,
-            "location": body.location if body else None
+            "query": q if q else None,
+            "location": loc if loc else None
         }
         with open(TRIGGER_PATH, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(data))
@@ -657,6 +689,73 @@ async def health() -> Dict[str, Any]:
         "jobs_total": jobs_total,
         "uptime_seconds": int(time.time() - start_time),
     }
+
+
+# ---------------------------------------------------------------------------
+# User Settings & Base Resume Endpoints
+# ---------------------------------------------------------------------------
+class UpdateSettingsRequest(BaseModel):
+    default_query: Optional[str] = None
+    default_location: Optional[str] = None
+
+@app.get("/user/settings")
+async def get_user_settings(user: dict = Depends(get_current_user)) -> Dict[str, Any]:
+    """Retrieve user settings and base resume metadata."""
+    from database import get_user
+    user_id = user["sub"]
+    try:
+        user_data = await get_user(user_id)
+        if not user_data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return {
+            "default_query": user_data.get("default_query") or "",
+            "default_location": user_data.get("default_location") or "",
+            "has_base_resume": user_data.get("base_resume_data") is not None,
+            "base_resume_filename": user_data.get("base_resume_filename") or ""
+        }
+    except Exception as exc:
+        logger.exception("Failed to fetch settings for user %s", user_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.post("/user/settings")
+async def save_user_settings(body: UpdateSettingsRequest, user: dict = Depends(get_current_user)) -> Dict[str, str]:
+    """Save default scraper settings."""
+    from database import update_user_settings
+    user_id = user["sub"]
+    try:
+        await update_user_settings(user_id, body.default_query, body.default_location)
+        return {"message": "Settings updated successfully"}
+    except Exception as exc:
+        logger.exception("Failed to save settings for user %s", user_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.post("/user/settings/resume")
+async def upload_base_resume(file: UploadFile = File(...), user: dict = Depends(get_current_user)) -> Dict[str, str]:
+    """Upload and save base .docx resume in PostgreSQL."""
+    from database import update_user_resume
+    user_id = user["sub"]
+    if not file.filename.lower().endswith('.docx'):
+        raise HTTPException(status_code=400, detail="Only .docx files are supported")
+    try:
+        contents = await file.read()
+        await update_user_resume(user_id, contents, file.filename)
+        return {"message": "Base resume uploaded and hosted successfully", "filename": file.filename}
+    except Exception as exc:
+        logger.exception("Failed to save resume for user %s", user_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.delete("/user/settings/resume")
+async def delete_base_resume(user: dict = Depends(get_current_user)) -> Dict[str, str]:
+    """Wipe hosted base resume."""
+    from database import delete_user_resume
+    user_id = user["sub"]
+    try:
+        await delete_user_resume(user_id)
+        return {"message": "Base resume removed"}
+    except Exception as exc:
+        logger.exception("Failed to clear resume for user %s", user_id)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -864,7 +963,7 @@ async def ai_filter(body: AIFilterRequest) -> Dict[str, Any]:
 # ──────────────────────────────────────────────
 # On-Demand Playwright Description Crawler
 # ──────────────────────────────────────────────
-async def scrape_full_description(url: str) -> str:
+async def _scrape_full_description_async(url: str) -> str:
     """Launch a headless Playwright context to extract full job descriptions on-demand."""
     from playwright.async_api import async_playwright
     import asyncio
@@ -917,6 +1016,44 @@ async def scrape_full_description(url: str) -> str:
         except Exception as e:
             logger.warning("Failed to fetch description from %s: %s", url, e)
             return ""
+
+
+async def scrape_full_description(url: str) -> str:
+    """Wrapper to run the async Playwright scraper inside a dedicated Proactor loop thread on Windows to avoid Uvicorn reload loop conflicts."""
+    import sys
+    if sys.platform != 'win32':
+        # Non-Windows systems can directly await the async crawler
+        return await _scrape_full_description_async(url)
+        
+    import threading
+    import asyncio
+    
+    result = ""
+    exception = None
+    
+    def thread_worker():
+        nonlocal result, exception
+        try:
+            # 1. Force the Windows Proactor loop policy inside this worker thread
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(_scrape_full_description_async(url))
+            finally:
+                loop.close()
+        except Exception as e:
+            exception = e
+            
+    thread = threading.Thread(target=thread_worker)
+    thread.start()
+    thread.join()
+    
+    if exception:
+        logger.error("Error in Proactor scraper thread: %s", exception)
+        return ""
+    return result
+
 
 
 @app.post("/jobs/{job_id}/fetch-description")
@@ -986,9 +1123,15 @@ async def tailor_resume(body: TailorResumeRequest, user: dict = Depends(get_curr
         "   - Action: Describe the exact action you took, including specific tools and tech stack used.\n"
         "   - Result/Metric: Provide a concrete, quantifiable result or business impact. DO NOT write passive or metric-less statements. Every single bullet point must have realistic, high-impact quantifiable metrics (e.g. 'boosted deployment speed by 40%', 'reduced cloud costs by $15,000/year', 'automated workflows saving 10 hours/week').\n"
         "2. PROACTIVE EXPERIENCE CREATION: If a skill, certification, technical tool, or qualification is requested in the job description but is NOT mentioned in the user's current resume, you MUST proactively create and formulate highly realistic, professional accomplishments following the PAR method to bridge these gaps. Integrate them organically into the user's history so they present as a strong, fully-qualified candidate.\n"
-        "3. Evaluate the user's current resume against the job description to calculate an initial/current ATS match score (an integer from 0 to 100).\n"
-        "4. Tailor the resume strictly following the rules above, optimizing all technical skills and achievements.\n"
-        "5. Evaluate the newly tailored resume to calculate the optimized ATS match score (an integer from 0 to 100).\n"
+        "3. RECRUITER 6-SECOND SCAN OPTIMIZATION: A recruiter has only 6 seconds to view a resume. Make an instant impression by following these visual and structural constraints:\n"
+        "   - Keep bullet points extremely clean, punchy, and compact (strictly 1 to 2 lines maximum per bullet point, no long narrative blocks).\n"
+        "   - Start each bullet point with a powerful, high-impact active verb (e.g., 'Engineered', 'Optimized', 'Automated', 'Spearheaded', 'Migrated'). Never use weak or passive verbs.\n"
+        "   - Bold crucial technical tools and quantifiable metrics (e.g. '**Microsoft Entra ID**', '**reduced resolution time by 38%**', '**99.9% uptime**') so they pop out immediately during a visual scan.\n"
+        "   - Structure bullets to place the most impressive outcome or metric either at the very beginning or the very end of the bullet where it is eye-catching.\n"
+        "4. ELIMINATE GENERIC TERMINOLOGY (PROACTIVE GAP FILLING): Never use vague placeholder words (e.g., 'live production environment', 'internal applications', 'software systems', 'technical issues', 'various databases'). Instead, proactively fill in the gaps with highly specific, realistic enterprise technologies, platforms, and database names that align perfectly with the target job description (e.g. '**Oracle ERP database**', '**IIS web application servers**', '**high-volume SQL Server environments**', '**Active Directory groups**').\n"
+        "5. Evaluate the user's current resume against the job description to calculate an initial/current ATS match score (an integer from 0 to 100).\n"
+        "6. Tailor the resume strictly following the rules above, optimizing all technical skills and achievements.\n"
+        "7. Evaluate the newly tailored resume to calculate the optimized ATS match score (an integer from 0 to 100).\n"
         "Return a JSON response with exactly four keys:\n"
         "- \"original_score\": (integer, representing the initial ATS match score of the original resume)\n"
         "- \"new_score\": (integer, representing the optimized ATS match score of the tailored resume)\n"
@@ -1186,24 +1329,41 @@ async def tailor_resume(body: TailorResumeRequest, user: dict = Depends(get_curr
 # ---------------------------------------------------------------------------
 @app.post("/ai/tailor-resume-docx")
 async def tailor_resume_docx(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
     job_id: str = Form(...),
     user: dict = Depends(get_current_user)
 ):
-    """Accept a .docx resume, tailor it with AI while preserving original styling and layout."""
+    """Accept a .docx resume (or use hosted base resume), tailor it with AI while preserving original styling and layout."""
     import io
     import re
     from docx import Document
     from docx.shared import Pt, Inches, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-    # 1. Validate file type
-    if not file.filename.lower().endswith('.docx'):
-        raise HTTPException(status_code=400, detail="Only .docx files are supported.")
+    contents = None
+    filename = None
 
-    # 2. Parse uploaded .docx and extract FULL text (including tables)
-    try:
+    if file is not None:
+        # 1. Validate file type
+        if not file.filename.lower().endswith('.docx'):
+            raise HTTPException(status_code=400, detail="Only .docx files are supported.")
         contents = await file.read()
+        filename = file.filename
+    else:
+        # Load from database settings
+        from database import get_user
+        user_data = await get_user(user["sub"])
+        if user_data and user_data.get("base_resume_data") is not None:
+            contents = user_data["base_resume_data"]
+            filename = user_data.get("base_resume_filename") or "Resume.docx"
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail="No resume file uploaded, and no base resume hosted. Please upload a file or save a base resume in Settings first."
+            )
+
+    # 2. Parse .docx and extract FULL text (including tables)
+    try:
         doc = Document(io.BytesIO(contents))
         
         def extract_full_text(document):
@@ -1286,8 +1446,15 @@ async def tailor_resume_docx(
 
     avg_font_size = sum(font_sizes) / len(font_sizes) if font_sizes else 11.0
 
+    def sanitize_bullet_text(text):
+        cleaned = text.strip()
+        while cleaned and cleaned[0] in ('-', '*', '•', '▪', '◦', '–', '▸', '▫', '·', '🔸'):
+            cleaned = cleaned[1:].strip()
+        return cleaned
+
     def extract_p_format(p):
         fmt = {
+            'text': p.text,
             'alignment': p.alignment,
             'space_before': p.paragraph_format.space_before,
             'space_after': p.paragraph_format.space_after,
@@ -1349,7 +1516,7 @@ async def tailor_resume_docx(
         is_bullet = False
         if p.style and (p.style.name.startswith('List') or 'bullet' in p.style.name.lower()):
             is_bullet = True
-        elif text_clean.startswith(('•', '*', '-', '▪', '◦', '–')):
+        elif text_clean.startswith(('•', '*', '-', '▪', '◦', '–', '▸', '▫')):
             is_bullet = True
             
         is_heading1 = False
@@ -1385,10 +1552,10 @@ async def tailor_resume_docx(
     default_body_fmt = {
         'alignment': None,
         'space_before': Pt(0),
-        'space_after': Pt(4),
-        'line_spacing': None,
-        'left_indent': None,
-        'right_indent': None,
+        'space_after': Pt(2),
+        'line_spacing': 1.05,
+        'left_indent': Pt(0),
+        'right_indent': Pt(0),
         'keep_with_next': None,
         'font_name': 'Calibri',
         'font_size': Pt(10.5),
@@ -1400,12 +1567,12 @@ async def tailor_resume_docx(
     }
 
     default_heading1_fmt = {
-        'alignment': None,
-        'space_before': Pt(10),
-        'space_after': Pt(3),
-        'line_spacing': None,
-        'left_indent': None,
-        'right_indent': None,
+        'alignment': WD_ALIGN_PARAGRAPH.LEFT,
+        'space_before': Pt(8),
+        'space_after': Pt(2.5),
+        'line_spacing': 1.1,
+        'left_indent': Pt(0),
+        'right_indent': Pt(0),
         'keep_with_next': True,
         'font_name': 'Calibri',
         'font_size': Pt(12),
@@ -1417,12 +1584,12 @@ async def tailor_resume_docx(
     }
 
     default_heading2_fmt = {
-        'alignment': None,
-        'space_before': Pt(8),
+        'alignment': WD_ALIGN_PARAGRAPH.LEFT,
+        'space_before': Pt(5),
         'space_after': Pt(2),
-        'line_spacing': None,
-        'left_indent': None,
-        'right_indent': None,
+        'line_spacing': 1.05,
+        'left_indent': Pt(0),
+        'right_indent': Pt(0),
         'keep_with_next': True,
         'font_name': 'Calibri',
         'font_size': Pt(11),
@@ -1437,8 +1604,8 @@ async def tailor_resume_docx(
         'alignment': None,
         'space_before': Pt(0),
         'space_after': Pt(2),
-        'line_spacing': None,
-        'left_indent': Inches(0.25),
+        'line_spacing': 1.05,
+        'left_indent': Inches(0.2),
         'right_indent': None,
         'keep_with_next': None,
         'font_name': 'Calibri',
@@ -1464,6 +1631,82 @@ async def tailor_resume_docx(
     heading1_fmt = merge_formats(heading1_templates, default_heading1_fmt)
     heading2_fmt = merge_formats(heading2_templates, default_heading2_fmt)
     bullet_fmt = merge_formats(bullet_templates, default_bullet_fmt)
+
+    # Clean / sanitize and cap spacing values for perfect layout density
+    def sanitize_and_cap_format(fmt, role):
+        # Cap font size to professional resume ranges
+        if fmt.get('font_size'):
+            try:
+                pt_size = fmt['font_size'].pt
+                if role in ('body', 'bullet'):
+                    if pt_size < 8.0 or pt_size > 12.0:
+                        fmt['font_size'] = Pt(10.0)
+                elif role == 'heading1':
+                    if pt_size < 11.0 or pt_size > 16.0:
+                        fmt['font_size'] = Pt(13.0)
+                elif role == 'heading2':
+                    if pt_size < 9.5 or pt_size > 13.0:
+                        fmt['font_size'] = Pt(11.0)
+            except Exception:
+                pass
+
+        # Fix paragraph spacing (space_before and space_after) to prevent ballooning
+        if role == 'body':
+            fmt['space_before'] = Pt(0)
+            if fmt.get('space_after') is None or fmt['space_after'].pt > 4.0:
+                fmt['space_after'] = Pt(2)
+            if fmt.get('line_spacing') is None or (isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] > 1.2) or (not isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] is not None and fmt['line_spacing'].pt > 14.0):
+                fmt['line_spacing'] = 1.05
+            fmt['left_indent'] = Pt(0)
+            fmt['right_indent'] = Pt(0)
+            
+        elif role == 'bullet':
+            fmt['space_before'] = Pt(0)
+            if fmt.get('space_after') is None or fmt['space_after'].pt > 3.0:
+                fmt['space_after'] = Pt(2)
+            if fmt.get('line_spacing') is None or (isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] > 1.2) or (not isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] is not None and fmt['line_spacing'].pt > 14.0):
+                fmt['line_spacing'] = 1.05
+            if fmt.get('left_indent') is None or fmt['left_indent'].inches > 0.4:
+                fmt['left_indent'] = Inches(0.2)
+            fmt['right_indent'] = Pt(0)
+            
+        elif role == 'heading1':
+            if fmt.get('space_before') is None or fmt['space_before'].pt > 12.0:
+                fmt['space_before'] = Pt(8)
+            if fmt.get('space_after') is None or fmt['space_after'].pt > 4.0:
+                fmt['space_after'] = Pt(2.5)
+            if fmt.get('line_spacing') is None or (isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] > 1.25):
+                fmt['line_spacing'] = 1.1
+            fmt['left_indent'] = Pt(0)
+            fmt['right_indent'] = Pt(0)
+            fmt['alignment'] = WD_ALIGN_PARAGRAPH.LEFT
+            
+        elif role == 'heading2':
+            if fmt.get('space_before') is None or fmt['space_before'].pt > 8.0:
+                fmt['space_before'] = Pt(5)
+            if fmt.get('space_after') is None or fmt['space_after'].pt > 3.0:
+                fmt['space_after'] = Pt(2)
+            if fmt.get('line_spacing') is None or (isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] > 1.2):
+                fmt['line_spacing'] = 1.05
+            fmt['left_indent'] = Pt(0)
+            fmt['right_indent'] = Pt(0)
+            fmt['alignment'] = WD_ALIGN_PARAGRAPH.LEFT
+            
+        return fmt
+
+    body_fmt = sanitize_and_cap_format(body_fmt, 'body')
+    heading1_fmt = sanitize_and_cap_format(heading1_fmt, 'heading1')
+    heading2_fmt = sanitize_and_cap_format(heading2_fmt, 'heading2')
+    bullet_fmt = sanitize_and_cap_format(bullet_fmt, 'bullet')
+
+    # Detect if the template headings were uppercase in the original document
+    heading1_is_upper = False
+    for t in heading1_templates:
+        t_text = t.get('text', '').strip()
+        if t_text:
+            if t_text.isupper():
+                heading1_is_upper = True
+                break
 
     # 6. Delete all original elements in-place after the styled header/contact info
     body_children = list(doc.element.body)
@@ -1499,46 +1742,138 @@ async def tailor_resume_docx(
                     pass
 
     # 7. Apply formatting and build tailored paragraphs
-    def apply_p_format(p, fmt):
-        if fmt['alignment'] is not None:
-            p.alignment = fmt['alignment']
-        if fmt['space_before'] is not None:
-            p.paragraph_format.space_before = fmt['space_before']
-        if fmt['space_after'] is not None:
-            p.paragraph_format.space_after = fmt['space_after']
-        if fmt['line_spacing'] is not None:
-            p.paragraph_format.line_spacing = fmt['line_spacing']
-        if fmt['left_indent'] is not None:
-            p.paragraph_format.left_indent = fmt['left_indent']
-        if fmt['right_indent'] is not None:
-            p.paragraph_format.right_indent = fmt['right_indent']
-        if fmt['keep_with_next'] is not None:
-            p.paragraph_format.keep_with_next = fmt['keep_with_next']
-        if fmt['style'] is not None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    def add_p_border_bottom(p, color_hex="BBBBBB", size=6):
+        """Adds a native Microsoft Word bottom border to a paragraph for a premium horizontal rule aesthetic."""
+        pPr = p._p.get_or_add_pPr()
+        pBdr = pPr.find(qn('w:pBdr'))
+        if pBdr is None:
+            pBdr = OxmlElement('w:pBdr')
+            pPr.append(pBdr)
+        
+        # Clear existing bottom border to prevent conflicts
+        existing_bottom = pBdr.find(qn('w:bottom'))
+        if existing_bottom is not None:
+            pBdr.remove(existing_bottom)
+            
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single')
+        bottom.set(qn('w:sz'), str(size))  # 1/8 pt units: 6 = 3/4 pt
+        bottom.set(qn('w:space'), '4')    # Spacing from text
+        bottom.set(qn('w:color'), color_hex)
+        pBdr.append(bottom)
+
+    def optimize_document_tables(document):
+        """Post-processor that centers tables and enforces explicit, proportional widths on tables AND cells
+
+        to prevent layout collapse on Google Docs or older Word editions.
+        """
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+        for table in document.tables:
+            table.alignment = WD_TABLE_ALIGNMENT.CENTER
             try:
-                p.style = fmt['style']
+                section = document.sections[0]
+                avail_width = section.page_width - section.left_margin - section.right_margin
+            except Exception:
+                avail_width = Inches(7.0)
+                
+            total_width_dxa = int(avail_width.inches * 1440)
+            table.width = avail_width
+            
+            for row in table.rows:
+                num_cells = len(row.cells)
+                if num_cells > 0:
+                    cell_width_dxa = int(total_width_dxa / num_cells)
+                    cell_width = Inches(avail_width.inches / num_cells)
+                    for cell in row.cells:
+                        cell.width = cell_width
+                        tcPr = cell._tc.get_or_add_tcPr()
+                        tcW = tcPr.find(qn('w:tcW'))
+                        if tcW is None:
+                            tcW = OxmlElement('w:tcW')
+                            tcPr.append(tcW)
+                        tcW.set(qn('w:w'), str(cell_width_dxa))
+                        tcW.set(qn('w:type'), 'dxa')
+
+    def apply_p_format(p, fmt, is_bullet=False):
+        """Applies consistent, explicit spacing and indent rules to a paragraph to maintain design integrity."""
+        if is_bullet:
+            try:
+                p.style = 'List Bullet'
             except Exception:
                 pass
+        else:
+            if fmt.get('style') is not None:
+                try:
+                    p.style = fmt['style']
+                except Exception:
+                    pass
+
+        if fmt.get('alignment') is not None:
+            p.alignment = fmt['alignment']
+            
+        # Guarantee explicit spacing on every paragraph to prevent Word default balloons
+        p.paragraph_format.space_before = fmt.get('space_before') if fmt.get('space_before') is not None else Pt(0)
+        p.paragraph_format.space_after = fmt.get('space_after') if fmt.get('space_after') is not None else Pt(2)
+        
+        if fmt.get('line_spacing') is not None:
+            p.paragraph_format.line_spacing = fmt['line_spacing']
+        else:
+            p.paragraph_format.line_spacing = 1.05
+            
+        if is_bullet:
+            # Force bullet layout hanging indents explicitly for premium tight layout
+            p.paragraph_format.left_indent = Inches(0.25)
+            p.paragraph_format.first_line_indent = Inches(-0.25)
+        else:
+            if fmt.get('left_indent') is not None:
+                p.paragraph_format.left_indent = fmt['left_indent']
+            else:
+                p.paragraph_format.left_indent = Pt(0)
+                
+        if fmt.get('right_indent') is not None:
+            p.paragraph_format.right_indent = fmt['right_indent']
+        else:
+            p.paragraph_format.right_indent = Pt(0)
+            
+        if fmt.get('keep_with_next') is not None:
+            p.paragraph_format.keep_with_next = fmt['keep_with_next']
 
     def apply_run_format(run, fmt, is_bold=False, is_italic=False):
-        if fmt['font_name'] is not None:
+        """Applies run-level font styles, size, bolding, and underlying XML font mappings to avoid browser defaults."""
+        if fmt.get('font_name') is not None:
             run.font.name = fmt['font_name']
-        if fmt['font_size'] is not None:
+            # Direct font overrides in the underlying Word XML
+            rPr = run._r.get_or_add_rPr()
+            rFonts = OxmlElement('w:rFonts')
+            rFonts.set(qn('w:ascii'), fmt['font_name'])
+            rFonts.set(qn('w:hAnsi'), fmt['font_name'])
+            rPr.append(rFonts)
+            
+        if fmt.get('font_size') is not None:
             run.font.size = fmt['font_size']
-        if fmt['font_color'] is not None:
+        if fmt.get('font_color') is not None:
             run.font.color.rgb = fmt['font_color']
         run.bold = is_bold
         run.italic = is_italic
-        if fmt['underline'] is not None:
+        if fmt.get('underline') is not None:
             run.underline = fmt['underline']
 
     def add_tailored_paragraph(document, text_line, fmt, is_bullet=False):
+        """Safely appends a paragraph, stripping raw line endings to prevent \n inside TextRuns."""
+        text_line = text_line.replace('\r', '').replace('\n', ' ')
+        
         if is_bullet:
-            p = document.add_paragraph(style='List Bullet')
+            try:
+                p = document.add_paragraph(style='List Bullet')
+            except Exception:
+                p = document.add_paragraph()
         else:
             p = document.add_paragraph()
             
-        apply_p_format(p, fmt)
+        apply_p_format(p, fmt, is_bullet=is_bullet)
         
         parts = re.split(r'(\*\*.*?\*\*|\*.*?\*)', text_line)
         for part in parts:
@@ -1577,34 +1912,41 @@ async def tailor_resume_docx(
         if not line.strip():
             continue
 
-        # Horizontal rule
+        # Horizontal rule using native paragraph bottom borders for premium appearance
         if line.strip() in ('---', '***', '___'):
             p = doc.add_paragraph()
-            p.paragraph_format.space_before = Pt(6)
-            p.paragraph_format.space_after = Pt(6)
-            run = p.add_run('─' * 60)
-            run.font.name = body_fmt['font_name'] or 'Calibri'
-            run.font.size = Pt(8)
-            run.font.color.rgb = RGBColor(0xBB, 0xBB, 0xBB)
+            p.paragraph_format.space_before = Pt(8)
+            p.paragraph_format.space_after = Pt(8)
+            add_p_border_bottom(p, color_hex="BBBBBB", size=6)
             continue
 
         # Headings
         if line.startswith('### '):
-            add_tailored_paragraph(doc, line[4:].strip(), heading2_fmt, is_bullet=False)
+            heading2_text = sanitize_bullet_text(line[4:])
+            add_tailored_paragraph(doc, heading2_text, heading2_fmt, is_bullet=False)
             continue
         if line.startswith('## '):
-            text_val = line[3:].strip().upper() if heading1_fmt['bold'] else line[3:].strip()
-            add_tailored_paragraph(doc, text_val, heading1_fmt, is_bullet=False)
+            heading_text = sanitize_bullet_text(line[3:])
+            if heading1_is_upper:
+                heading_text = heading_text.upper()
+            add_tailored_paragraph(doc, heading_text, heading1_fmt, is_bullet=False)
             continue
         if line.startswith('# '):
             title_fmt = heading1_fmt.copy()
             title_fmt['alignment'] = WD_ALIGN_PARAGRAPH.CENTER
-            add_tailored_paragraph(doc, line[2:].strip(), title_fmt, is_bullet=False)
+            title_text = sanitize_bullet_text(line[2:])
+            add_tailored_paragraph(doc, title_text, title_fmt, is_bullet=False)
             continue
 
-        # Bullet points
-        if line.strip().startswith(('- ', '* ')):
-            bullet_text = line.strip()[2:]
+        # Bullet points matching broad list headers
+        line_stripped = line.strip()
+        if line_stripped.startswith(('- ', '* ', '• ', '▪ ', '▸ ', '▫ ', '◦ ', '· ', '🔸 ', '– ')):
+            bullet_text = line_stripped
+            for prefix in ('- ', '* ', '• ', '▪ ', '▸ ', '▫ ', '◦ ', '· ', '🔸 ', '– '):
+                if bullet_text.startswith(prefix):
+                    bullet_text = bullet_text[len(prefix):]
+                    break
+            bullet_text = sanitize_bullet_text(bullet_text)
             add_tailored_paragraph(doc, bullet_text, bullet_fmt, is_bullet=True)
             continue
 
@@ -1623,6 +1965,26 @@ async def tailor_resume_docx(
     run_label.font.size = Pt(9.5)
     run_label.font.color.rgb = RGBColor(0x0A, 0x4D, 0x8C)
 
+    # Explicitly set page dimensions (US Letter) on all sections of the document to prevent A4 default shifts
+    for section in doc.sections:
+        if section.top_margin is None:
+            section.top_margin = Inches(0.75)
+        if section.bottom_margin is None:
+            section.bottom_margin = Inches(0.75)
+        if section.left_margin is None:
+            section.left_margin = Inches(0.75)
+        if section.right_margin is None:
+            section.right_margin = Inches(0.75)
+            
+        section.page_width = Inches(8.5)
+        section.page_height = Inches(11.0)
+
+    # Optimize all tables in the document (set cell widths explicitly and align center)
+    try:
+        optimize_document_tables(doc)
+    except Exception as e:
+        logger.warning(f"Could not optimize tables: {e}")
+
     # 9. Save and stream the optimized .docx file
     buf = io.BytesIO()
     doc.save(buf)
@@ -1640,7 +2002,7 @@ async def tailor_resume_docx(
     except Exception:
         company_name = "Optimized"
 
-    safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', file.filename.rsplit('.', 1)[0])
+    safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', filename.rsplit('.', 1)[0])
     safe_company = re.sub(r'[^a-zA-Z0-9_\-]', '_', company_name.strip())
     download_name = f"{safe_name}_{safe_company}.docx"
 

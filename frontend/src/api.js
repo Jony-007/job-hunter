@@ -98,7 +98,7 @@ export async function logoutCustom() {
   }
 }
 
-export async function fetchJobs({ status, limit = 50, offset = 0, search, active_only = true } = {}) {
+export async function fetchJobs({ status, limit = 50, offset = 0, search, active_only = true, sort_by } = {}) {
   try {
     const params = new URLSearchParams()
     if (status && status !== 'all') params.append('status', status)
@@ -106,6 +106,7 @@ export async function fetchJobs({ status, limit = 50, offset = 0, search, active
     params.append('offset', offset)
     if (search) params.append('search', search)
     params.append('active_only', active_only)
+    if (sort_by) params.append('sort_by', sort_by)
     const res = await fetchWithCreds(`${BASE_URL}/jobs?${params}`, {
       headers: getAuthHeaders()
     })
@@ -252,10 +253,12 @@ export async function tailorResume(jobId, resumeText) {
   }
 }
 
-export async function tailorResumeDocx(jobId, file) {
+export async function tailorResumeDocx(jobId, file = null) {
   try {
     const formData = new FormData()
-    formData.append('file', file)
+    if (file) {
+      formData.append('file', file)
+    }
     formData.append('job_id', jobId)
 
     // Don't set Content-Type — browser sets it with multipart boundary
@@ -306,4 +309,70 @@ export function subscribeToEvents(onStats, onNewJobs, token) {
     evtSource.close()
   }
   return evtSource
+}
+
+export async function fetchSettings() {
+  try {
+    const res = await fetchWithCreds(`${BASE_URL}/user/settings`, {
+      headers: getAuthHeaders()
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.json()
+  } catch (err) {
+    return { error: err.message || 'Failed to fetch settings' }
+  }
+}
+
+export async function saveSettings(defaultQuery, defaultLocation) {
+  try {
+    const res = await fetchWithCreds(`${BASE_URL}/user/settings`, {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        default_query: defaultQuery,
+        default_location: defaultLocation
+      })
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.json()
+  } catch (err) {
+    return { error: err.message || 'Failed to save settings' }
+  }
+}
+
+export async function uploadBaseResume(file) {
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = localStorage.getItem('token')
+    const headers = {}
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    const res = await fetchWithCreds(`${BASE_URL}/user/settings/resume`, {
+      method: 'POST',
+      headers,
+      body: formData
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || `HTTP ${res.status}`)
+    }
+    return await res.json()
+  } catch (err) {
+    return { error: err.message || 'Upload failed' }
+  }
+}
+
+export async function deleteBaseResume() {
+  try {
+    const res = await fetchWithCreds(`${BASE_URL}/user/settings/resume`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.json()
+  } catch (err) {
+    return { error: err.message || 'Delete failed' }
+  }
 }

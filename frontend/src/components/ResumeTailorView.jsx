@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { fetchJobDescription, tailorResume, tailorResumeDocx } from '../api'
+import { fetchJobDescription, tailorResume, tailorResumeDocx, fetchSettings } from '../api'
 
 export default function ResumeTailorView({ jobs, activeJobId, onBackToDashboard, addToast }) {
   const [selectedJobId, setSelectedJobId] = useState(activeJobId || '')
@@ -23,7 +23,20 @@ export default function ResumeTailorView({ jobs, activeJobId, onBackToDashboard,
   // ── DOCX Upload States ──
   const [docxFile, setDocxFile] = useState(null)
   const [docxMode, setDocxMode] = useState(false) // true = docx upload mode
+  const [hasHostedResume, setHasHostedResume] = useState(false)
+  const [hostedResumeFilename, setHostedResumeFilename] = useState('')
   const fileInputRef = useRef(null)
+
+  // Fetch settings on mount to check for hosted base resume
+  useEffect(() => {
+    fetchSettings().then(res => {
+      if (res && !res.error && res.has_base_resume) {
+        setHasHostedResume(true)
+        setHostedResumeFilename(res.base_resume_filename || 'Hosted Base Resume')
+        setDocxMode(true) // Default to DOCX mode if they have a base resume hosted
+      }
+    })
+  }, [])
 
   // Resolve current active job object
   const selectedJob = jobs.find(j => j.id === selectedJobId)
@@ -124,8 +137,8 @@ export default function ResumeTailorView({ jobs, activeJobId, onBackToDashboard,
       addToast('Please select a target job listing first', 'warning')
       return
     }
-    if (!docxFile) {
-      addToast('Please upload a .docx resume file first', 'warning')
+    if (!docxFile && !hasHostedResume) {
+      addToast('Please upload a .docx resume file first or host one in Settings', 'warning')
       return
     }
 
@@ -136,7 +149,11 @@ export default function ResumeTailorView({ jobs, activeJobId, onBackToDashboard,
     setNewScore(null)
     setDisplayStage('analyzing')
 
-    addToast('📄 Uploading resume & optimizing with AI...', 'info')
+    if (docxFile) {
+      addToast('📄 Uploading resume & optimizing with AI...', 'info')
+    } else {
+      addToast('📄 Fetching stored base resume & optimizing with AI...', 'info')
+    }
 
     const result = await tailorResumeDocx(selectedJobId, docxFile)
 
@@ -171,7 +188,7 @@ export default function ResumeTailorView({ jobs, activeJobId, onBackToDashboard,
         }
       }, 1000)
     }, 1500)
-  }, [selectedJobId, docxFile, addToast, downloadBlob])
+  }, [selectedJobId, docxFile, hasHostedResume, addToast, downloadBlob])
 
   // ── Standard Text Tailoring (existing) ──
   const handleOptimize = useCallback(async () => {
@@ -410,6 +427,19 @@ export default function ResumeTailorView({ jobs, activeJobId, onBackToDashboard,
                   </div>
                   <button className="btn-remove-file" onClick={handleRemoveFile} title="Remove file">✕</button>
                 </div>
+              ) : hasHostedResume ? (
+                <div className="docx-file-loaded hosted" style={{ border: '1px dashed var(--accent)', padding: 12 }}>
+                  <div className="docx-file-info">
+                    <span className="docx-file-icon">📂</span>
+                    <div>
+                      <span className="docx-file-name">{hostedResumeFilename}</span>
+                      <span className="docx-file-size" style={{ color: 'var(--accent)', fontWeight: 'bold' }}>Hosted Base Resume Active</span>
+                    </div>
+                  </div>
+                  <label htmlFor="docx-file-input" className="btn-change-file" style={{ cursor: 'pointer', color: 'var(--accent)', fontSize: '0.8rem', textDecoration: 'underline' }}>
+                    Upload different file
+                  </label>
+                </div>
               ) : (
                 <label className="docx-drop-label" htmlFor="docx-file-input">
                   <span className="docx-drop-icon">⬆️</span>
@@ -430,15 +460,17 @@ export default function ResumeTailorView({ jobs, activeJobId, onBackToDashboard,
             <button
               className="btn-docx-optimize"
               onClick={handleDocxOptimize}
-              disabled={tailoring || !selectedJobId || !docxFile || fetchingDesc}
+              disabled={tailoring || !selectedJobId || (!docxFile && !hasHostedResume) || fetchingDesc}
             >
               {tailoring && docxMode ? (
                 <>
                   <span className="spinner-ring small" />
                   Processing .docx...
                 </>
-              ) : (
+              ) : docxFile ? (
                 <>🚀 Upload &amp; Tailor .DOCX</>
+              ) : (
+                <>🚀 Tailor Hosted Base Resume</>
               )}
             </button>
           </div>

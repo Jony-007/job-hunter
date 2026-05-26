@@ -105,6 +105,10 @@ async def init_db() -> None:
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified INTEGER DEFAULT 0")
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token TEXT")
         await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS description TEXT")
+        await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS default_query TEXT")
+        await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS default_location TEXT")
+        await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_resume_data BYTEA")
+        await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_resume_filename TEXT")
 
         # Seed schema_version if empty
         row = await db.fetchrow("SELECT COUNT(*) FROM schema_version")
@@ -261,6 +265,7 @@ async def get_all_jobs(
     search: str | None = None,
     active_only: bool = True,
     user_id: str | None = None,
+    sort_by: str | None = None,
 ) -> dict:
     """Return a paginated dict: {jobs, total, offset, limit, has_more}.
 
@@ -319,6 +324,10 @@ async def get_all_jobs(
         offset_idx = p_idx + 1
         params.extend([limit, offset])
 
+        sort_order = "jobs.match_score DESC, jobs.date_found DESC"
+        if sort_by == "date":
+            sort_order = "jobs.date_found DESC, jobs.match_score DESC"
+
         if user_id:
             query_sql = (
                 f"SELECT jobs.id, jobs.title, jobs.company, jobs.location, jobs.salary, jobs.url, jobs.source, jobs.description, "
@@ -330,12 +339,12 @@ async def get_all_jobs(
                 f"FROM jobs "
                 f"LEFT JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 "
                 f"{where} "
-                f"ORDER BY jobs.match_score DESC, jobs.date_found DESC LIMIT ${limit_idx} OFFSET ${offset_idx}"
+                f"ORDER BY {sort_order} LIMIT ${limit_idx} OFFSET ${offset_idx}"
             )
             rows = await db.fetch(query_sql, *params)
         else:
             query_sql = (
-                f"SELECT * FROM jobs {where} ORDER BY match_score DESC, date_found DESC LIMIT ${limit_idx} OFFSET ${offset_idx}"
+                f"SELECT * FROM jobs {where} ORDER BY {sort_order} LIMIT ${limit_idx} OFFSET ${offset_idx}"
             )
             rows = await db.fetch(query_sql, *params)
 
@@ -565,5 +574,41 @@ async def get_scrape_logs(limit: int = 20) -> list[dict]:
             "SELECT * FROM scrape_log ORDER BY id DESC LIMIT $1", limit
         )
         return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def update_user_settings(user_id: str, query: str | None, location: str | None) -> None:
+    """Update default search query and location for a user."""
+    db = await _get_db()
+    try:
+        await db.execute(
+            "UPDATE users SET default_query = $1, default_location = $2 WHERE id = $3",
+            query, location, user_id
+        )
+    finally:
+        await db.close()
+
+
+async def update_user_resume(user_id: str, resume_data: bytes, filename: str) -> None:
+    """Update base resume binary and filename for a user."""
+    db = await _get_db()
+    try:
+        await db.execute(
+            "UPDATE users SET base_resume_data = $1, base_resume_filename = $2 WHERE id = $3",
+            resume_data, filename, user_id
+        )
+    finally:
+        await db.close()
+
+
+async def delete_user_resume(user_id: str) -> None:
+    """Wipe the hosted base resume from database."""
+    db = await _get_db()
+    try:
+        await db.execute(
+            "UPDATE users SET base_resume_data = NULL, base_resume_filename = NULL WHERE id = $1",
+            user_id
+        )
     finally:
         await db.close()

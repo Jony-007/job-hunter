@@ -4707,8 +4707,370 @@ ul, ol { list-style: none; }
   font-size: 0.82rem;
   line-height: 1.5;
   color: var(--text-muted);
-  max-width: 320px;
   margin: 0;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Workspace Settings & Base Resume Hosting styles
+   ═══════════════════════════════════════════════════════════ */
+
+.settings-view-container {
+  animation: fadeUp 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.settings-header-deck {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 20px;
+  margin-bottom: 24px;
+}
+
+.btn-back-dashboard {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent2);
+  font-weight: 600;
+  transition: all var(--transition);
+}
+
+.btn-back-dashboard:hover {
+  color: var(--accent);
+  transform: translateX(-4px);
+}
+
+.settings-title-group h1 {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: -0.5px;
+}
+
+.settings-subtitle {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.settings-grid-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 24px;
+}
+
+.settings-card {
+  padding: 28px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  transition: all var(--transition);
+}
+
+.settings-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-md);
+}
+
+.card-header-icon {
+  font-size: 1.8rem;
+  margin-bottom: 16px;
+}
+
+.settings-card h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 8px;
+}
+
+.card-desc {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+}
+
+.form-group-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group-input label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.form-group-input input {
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: #ffffff;
+  font-size: 0.88rem;
+  transition: all var(--transition);
+}
+
+.form-group-input input:focus {
+  border-color: var(--accent);
+  background: var(--surface3);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  outline: none;
+}
+
+.input-tip {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  opacity: 0.85;
+}
+
+.btn-save-settings {
+  width: 100%;
+  padding: 12px 18px;
+  background: linear-gradient(135deg, var(--accent) 0%, #00dfc1 100%);
+  color: #0b1326;
+  font-weight: 700;
+  font-size: 0.88rem;
+  border-radius: var(--radius-xs);
+  transition: all var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-save-settings:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-glow);
+}
+
+.btn-save-settings:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.hosted-resume-status-card {
+  padding: 20px;
+  background: var(--surface2);
+  border: 1px solid rgba(0, 245, 212, 0.15);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: all var(--transition);
+}
+
+.resume-status-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.docx-icon-large {
+  font-size: 2.2rem;
+}
+
+.resume-meta-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.resume-filename-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #ffffff;
+  word-break: break-all;
+}
+
+.resume-hosting-badge {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: var(--accent-glow);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  align-self: flex-start;
+}
+
+.btn-delete-hosted-resume {
+  width: 100%;
+  padding: 10px;
+  background: rgba(255, 180, 171, 0.08);
+  border: 1px solid rgba(255, 180, 171, 0.2);
+  color: var(--danger);
+  border-radius: var(--radius-xs);
+  font-weight: 600;
+  font-size: 0.8rem;
+  transition: all var(--transition);
+  text-align: center;
+}
+
+.btn-delete-hosted-resume:hover {
+  background: rgba(255, 180, 171, 0.18);
+  border-color: var(--danger);
+}
+
+.resume-uploader-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 32px 24px;
+  text-align: center;
+  transition: all var(--transition);
+  cursor: pointer;
+  background: var(--surface2);
+}
+
+.resume-uploader-zone:hover {
+  border-color: var(--accent);
+  background: rgba(0, 245, 212, 0.02);
+}
+
+.uploader-interactive-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.upload-arrow-large {
+  font-size: 2.2rem;
+  margin-bottom: 4px;
+  transition: transform var(--transition);
+}
+
+.resume-uploader-zone:hover .upload-arrow-large {
+  transform: translateY(-4px);
+}
+
+.uploader-interactive-area h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.uploader-interactive-area p {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 280px;
+  margin: 0 auto;
+}
+
+.uploader-loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface3);
+  border-radius: var(--radius-xs);
+  margin-top: 16px;
+  font-size: 0.8rem;
+  color: var(--accent);
+  animation: pulse 2s infinite ease-in-out;
+}
+
+.settings-tip-box {
+  background: rgba(183, 196, 255, 0.05);
+  border: 1px solid rgba(183, 196, 255, 0.12);
+  border-radius: var(--radius-xs);
+  padding: 14px 16px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.tip-box-icon {
+  font-size: 1.1rem;
+}
+
+.tip-box-text {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.spinner-mini {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  display: inline-block;
+}
+
+/* ── Docx Tailor Panel Emerald Dashed Active Border Card ── */
+.docx-file-loaded.hosted {
+  transition: all var(--transition);
+}
+
+.docx-file-loaded.hosted:hover {
+  background: rgba(0, 245, 212, 0.04) !important;
+  border-color: var(--accent) !important;
+}
+
+/* ── Sort Dropdown Mini in dashboard matches header ───────── */
+.matches-sort-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  transition: all var(--transition);
+}
+
+.matches-sort-selector:hover {
+  border-color: var(--border-hover);
+  background: var(--surface3);
+}
+
+.sort-label-lbl {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+}
+
+.sort-dropdown-mini {
+  background: transparent;
+  border: none;
+  color: var(--accent2);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  padding: 0;
+  font-family: var(--font-body);
+}
+
+.sort-dropdown-mini option {
+  background: var(--surface3);
+  color: var(--text);
+  font-weight: 500;
+}
+
+
 
 

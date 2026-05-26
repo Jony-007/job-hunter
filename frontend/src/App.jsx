@@ -7,7 +7,8 @@ import {
   triggerScrape,
   subscribeToEvents,
   aiFilter,
-  logoutCustom
+  logoutCustom,
+  fetchSettings
 } from './api'
 import Sidebar from './components/Sidebar'
 import StatsBar from './components/StatsBar'
@@ -17,6 +18,7 @@ import Pagination from './components/Pagination'
 import OfflineBanner from './components/OfflineBanner'
 import LandingPage from './components/LandingPage'
 import ResumeTailorView from './components/ResumeTailorView'
+import SettingsView from './components/SettingsView'
 
 const PAGE_SIZE = 50
 
@@ -96,6 +98,7 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState(null)
   const [newJobIds, setNewJobIds] = useState(new Set())
   const [totalJobs, setTotalJobs] = useState(0)
+  const [sortBy, setSortBy] = useState('match')
   const [hasMore, setHasMore] = useState(false)
   const [toasts, setToasts] = useState([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -184,7 +187,8 @@ export default function App() {
       limit: PAGE_SIZE,
       offset: pageNum * PAGE_SIZE,
       search: debouncedSearch || undefined,
-      active_only: false
+      active_only: false,
+      sort_by: sortBy
     })
 
     if (result.error) {
@@ -209,7 +213,7 @@ export default function App() {
     setLastUpdated(new Date())
     setLoading(false)
     setLoadingMore(false)
-  }, [statusFilter, debouncedSearch, token])
+  }, [statusFilter, debouncedSearch, token, sortBy])
 
   // ── Fetch Stats ───────────────────────────────────────────
   const loadStats = useCallback(async () => {
@@ -228,6 +232,12 @@ export default function App() {
     if (token) {
       loadStats()
       loadJobs(0)
+      fetchSettings().then(res => {
+        if (res && !res.error) {
+          setCustomQuery(res.default_query || '')
+          setCustomLoc(res.default_location || '')
+        }
+      })
     }
   }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -334,7 +344,7 @@ export default function App() {
       setPage(0)
       loadJobs(0)
     }
-  }, [statusFilter, debouncedSearch, loadJobs, token])
+  }, [statusFilter, debouncedSearch, loadJobs, token, sortBy])
 
   // ── Handlers ──────────────────────────────────────────────
   const handleStatusChange = useCallback(async (id, newStatus) => {
@@ -403,6 +413,11 @@ export default function App() {
 
   const handleFilterChange = useCallback((filter) => {
     setStatusFilter(filter)
+    if (filter === 'new') {
+      setSortBy('date')
+    } else {
+      setSortBy('match')
+    }
   }, [])
 
   const handleSidebarToggle = useCallback(() => {
@@ -582,6 +597,11 @@ export default function App() {
             <ResumeTailorView
               jobs={jobs}
               activeJobId={activeTailorJobId}
+              onBackToDashboard={() => setCurrentView('dashboard')}
+              addToast={addToast}
+            />
+          ) : currentView === 'settings' ? (
+            <SettingsView
               onBackToDashboard={() => setCurrentView('dashboard')}
               addToast={addToast}
             />
@@ -808,7 +828,17 @@ export default function App() {
                   <div className="matches-column-header">
                     <div className="matches-header-top">
                       <h2>Recent Matches</h2>
-                      <span className="sort-label">Sorted by Match %</span>
+                      <div className="matches-sort-selector">
+                        <span className="sort-label-lbl">Sort by:</span>
+                        <select
+                          className="sort-dropdown-mini"
+                          value={sortBy}
+                          onChange={e => setSortBy(e.target.value)}
+                        >
+                          <option value="match">🔥 Highest Match %</option>
+                          <option value="date">📅 Most Recent</option>
+                        </select>
+                      </div>
                     </div>
                     <div className="matches-local-search">
                       <span className="local-search-icon">🔍</span>
