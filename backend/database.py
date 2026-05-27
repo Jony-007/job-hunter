@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 # Neon PostgreSQL connection string (with environment variable override support)
 POSTGRES_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://neondb_owner:npg_w7L8rCIBVXAJ@ep-lingering-frost-aq86xl1u.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require"
+    "postgresql://neondb_owner:YOUR_DATABASE_PASSWORD_HERE@ep-lingering-frost-aq86xl1u.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require"
 )
+
 
 
 def _utcnow_iso() -> str:
