@@ -19,6 +19,7 @@ import OfflineBanner from './components/OfflineBanner'
 import LandingPage from './components/LandingPage'
 import ResumeTailorView from './components/ResumeTailorView'
 import SettingsView from './components/SettingsView'
+import TailorDrawer from './components/TailorDrawer'
 
 const PAGE_SIZE = 50
 
@@ -101,6 +102,7 @@ export default function App() {
   const [sortBy, setSortBy] = useState('match')
   const [hasMore, setHasMore] = useState(false)
   const [filterUnder30, setFilterUnder30] = useState(false)
+  const [isTailorDrawerOpen, setIsTailorDrawerOpen] = useState(false)
   const [toasts, setToasts] = useState([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [customQuery, setCustomQuery] = useState('')
@@ -530,8 +532,7 @@ export default function App() {
 
   const handleTailorClick = useCallback(() => {
     if (activeJob) {
-      setActiveTailorJobId(activeJob.id)
-      setCurrentView('resume-tailor')
+      setIsTailorDrawerOpen(true)
     }
   }, [activeJob])
 
@@ -1174,6 +1175,14 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* Tailor Resume Side Drawer Overlay */}
+      <TailorDrawer
+        isOpen={isTailorDrawerOpen}
+        onClose={() => setIsTailorDrawerOpen(false)}
+        job={activeJob}
+        addToast={addToast}
+      />
 
       {/* Toast Container */}
       <div className="toast-container">
