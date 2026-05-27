@@ -963,10 +963,11 @@ async def ai_filter(body: AIFilterRequest) -> Dict[str, Any]:
 # ──────────────────────────────────────────────
 # On-Demand Playwright Description Crawler
 # ──────────────────────────────────────────────
-async def _scrape_full_description_async(url: str) -> str:
-    """Launch a headless Playwright context to extract full job descriptions on-demand."""
+async def _scrape_full_description_async(url: str) -> dict:
+    """Launch a headless Playwright context to extract full job descriptions and applicant metrics on-demand."""
     from playwright.async_api import async_playwright
     import asyncio
+    import re
     
     async with async_playwright() as p:
         try:
@@ -982,8 +983,11 @@ async def _scrape_full_description_async(url: str) -> str:
             await asyncio.sleep(2.0)
             
             description = ""
+            applicants_count = None
+            applicants_raw = None
             
             if "linkedin.com" in url:
+                # 1. Extract description
                 selectors = [".show-more-less-html__markup", ".description__text", "#job-details", ".jobs-description__container"]
                 for sel in selectors:
                     el = await page.query_selector(sel)
@@ -991,6 +995,43 @@ async def _scrape_full_description_async(url: str) -> str:
                         description = await el.inner_text()
                         if description.strip():
                             break
+                            
+                # 2. Extract applicant metrics
+                app_selectors = [
+                    ".num-applicants__caption", 
+                    ".jobs-details-top-card__applicant-count", 
+                    ".num-applicants", 
+                    ".base-aside-card__metadata",
+                    "span.topcard__flavor--metadata.topcard__flavor--bullet",
+                    ".topcard__flavor--metadata"
+                ]
+                for sel in app_selectors:
+                    el = await page.query_selector(sel)
+                    if el:
+                        txt = await el.inner_text()
+                        if txt and ("applicant" in txt.lower() or "be among the first" in txt.lower()):
+                            applicants_raw = txt.strip()
+                            # Parse exact integer count out of raw text caption
+                            try:
+                                cleaned = applicants_raw.lower()
+                                if "first 10" in cleaned or "first 10 applicants" in cleaned:
+                                    applicants_count = 9
+                                elif "over" in cleaned:
+                                    match_over = re.search(r'over\s+(\d+)', cleaned)
+                                    if match_over:
+                                        applicants_count = int(match_over.group(1)) + 1
+                                    else:
+                                        match_num = re.search(r'(\d+)', cleaned)
+                                        if match_num:
+                                            applicants_count = int(match_num.group(1)) + 1
+                                else:
+                                    match_num = re.search(r'(\d+)', cleaned)
+                                    if match_num:
+                                        applicants_count = int(match_num.group(1))
+                            except Exception:
+                                pass
+                            break
+                            
             elif "glassdoor" in url:
                 selectors = ["[data-test=\"jobDescriptionText\"]", ".jobDescriptionContent", "#JobDescriptionContainer"]
                 for sel in selectors:
@@ -1012,13 +1053,17 @@ async def _scrape_full_description_async(url: str) -> str:
                 
             await context.close()
             await browser.close()
-            return description.strip()
+            return {
+                "description": description.strip(),
+                "applicants": applicants_count,
+                "applicants_raw": applicants_raw
+            }
         except Exception as e:
             logger.warning("Failed to fetch description from %s: %s", url, e)
-            return ""
+            return {"description": "", "applicants": None, "applicants_raw": None}
 
 
-async def scrape_full_description(url: str) -> str:
+async def scrape_full_description(url: str) -> dict:
     """Wrapper to run the async Playwright scraper inside a dedicated Proactor loop thread on Windows to avoid Uvicorn reload loop conflicts."""
     import sys
     if sys.platform != 'win32':
@@ -1028,7 +1073,7 @@ async def scrape_full_description(url: str) -> str:
     import threading
     import asyncio
     
-    result = ""
+    result = {}
     exception = None
     
     def thread_worker():
@@ -1051,43 +1096,63 @@ async def scrape_full_description(url: str) -> str:
     
     if exception:
         logger.error("Error in Proactor scraper thread: %s", exception)
-        return ""
+        return {}
     return result
 
 
 
 @app.post("/jobs/{job_id}/fetch-description")
 async def fetch_description(job_id: str, user: dict = Depends(get_current_user)) -> Dict[str, Any]:
-    """Fetch the full description of a job on-demand, caching it inside PostgreSQL."""
-    from database import get_job_description, update_job_description, _get_db
+    """Fetch the full description of a job on-demand, caching description and applicant count inside PostgreSQL."""
+    from database import update_job_description, _get_db
     
-    # 1. Try PostgreSQL cache first
-    desc = await get_job_description(job_id)
-    if desc and desc.strip():
-        return {"description": desc}
-        
-    # 2. Query url
+    # 1. Fetch from PostgreSQL cache in a single optimized query
     db = await _get_db()
     try:
-        row = await db.fetchrow("SELECT url FROM jobs WHERE id = $1", job_id)
+        row = await db.fetchrow("SELECT description, applicants, applicants_raw, url FROM jobs WHERE id = $1", job_id)
     finally:
         await db.close()
         
-    if not row or not row["url"]:
-        raise HTTPException(status_code=404, detail="Job or URL not found")
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    if row["description"] and row["description"].strip():
+        return {
+            "description": row["description"],
+            "applicants": row["applicants"],
+            "applicants_raw": row["applicants_raw"]
+        }
         
     url = row["url"]
-    
-    # 3. Fetch description in background via Playwright
+    if not url:
+        raise HTTPException(status_code=400, detail="Job has no valid search URL")
+        
+    # 2. Fetch description and applicant metrics in background via Playwright
     logger.info("On-demand desc scraper: Launching browser for URL %s", url)
-    fetched_desc = await scrape_full_description(url)
+    fetched_data = await scrape_full_description(url)
     
-    if not fetched_desc.strip():
+    desc_text = ""
+    app_count = None
+    app_raw = None
+    
+    if isinstance(fetched_data, dict):
+        desc_text = fetched_data.get("description", "")
+        app_count = fetched_data.get("applicants")
+        app_raw = fetched_data.get("applicants_raw")
+    else:
+        desc_text = fetched_data
+        
+    if not desc_text.strip():
         raise HTTPException(status_code=500, detail="Could not retrieve job description from the page.")
         
-    # 4. Save to database
-    await update_job_description(job_id, fetched_desc)
-    return {"description": fetched_desc}
+    # 3. Save description, applicant count, and raw metrics back to PostgreSQL
+    await update_job_description(job_id, desc_text, app_count, app_raw)
+    
+    return {
+        "description": desc_text,
+        "applicants": app_count,
+        "applicants_raw": app_raw
+    }
 
 
 @app.post("/ai/tailor-resume")

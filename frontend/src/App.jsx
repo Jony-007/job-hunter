@@ -100,6 +100,7 @@ export default function App() {
   const [totalJobs, setTotalJobs] = useState(0)
   const [sortBy, setSortBy] = useState('match')
   const [hasMore, setHasMore] = useState(false)
+  const [filterUnder30, setFilterUnder30] = useState(false)
   const [toasts, setToasts] = useState([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [customQuery, setCustomQuery] = useState('')
@@ -445,8 +446,14 @@ export default function App() {
     addToast('Logged out successfully', 'info')
   }, [addToast])
 
-  // ── Filter out AI-filtered jobs from display ──────────────
-  const displayJobs = jobs.filter(j => !aiFilteredIds.has(j.id))
+  // ── Filter out AI-filtered jobs from display and optionally limit by applicant count ──────────────
+  const displayJobs = jobs.filter(j => {
+    if (aiFilteredIds.has(j.id)) return false
+    if (filterUnder30) {
+      if (j.applicants !== null && j.applicants > 30) return false
+    }
+    return true
+  })
 
   // Auto-select first job from filtered opportunities list
   useEffect(() => {
@@ -828,7 +835,16 @@ export default function App() {
                   <div className="matches-column-header">
                     <div className="matches-header-top">
                       <h2>Recent Matches</h2>
-                      <div className="matches-sort-selector">
+                      <div className="matches-sort-selector" style={{ gap: '16px' }}>
+                        <label className="under30-filter-toggle" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-secondary, #94a3b8)', userSelect: 'none' }}>
+                          <input 
+                            type="checkbox"
+                            checked={filterUnder30}
+                            onChange={e => setFilterUnder30(e.target.checked)}
+                            style={{ width: '14px', height: '14px', accentColor: 'var(--color-primary, #3b82f6)', cursor: 'pointer' }}
+                          />
+                          <span>👥 Under 30 Applicants</span>
+                        </label>
                         <span className="sort-label-lbl">Sort by:</span>
                         <select
                           className="sort-dropdown-mini"

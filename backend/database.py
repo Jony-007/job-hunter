@@ -110,6 +110,8 @@ async def init_db() -> None:
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS default_location TEXT")
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_resume_data BYTEA")
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_resume_filename TEXT")
+        await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS applicants INTEGER DEFAULT NULL")
+        await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS applicants_raw TEXT DEFAULT NULL")
 
         # Seed schema_version if empty
         row = await db.fetchrow("SELECT COUNT(*) FROM schema_version")
@@ -250,11 +252,23 @@ async def get_job_description(job_id: str) -> str | None:
         await db.close()
 
 
-async def update_job_description(job_id: str, description: str) -> None:
-    """Update a job's description."""
+async def update_job_description(job_id: str, description: str, applicants: int | None = None, applicants_raw: str | None = None) -> None:
+    """Update a job's description and optional applicant counts."""
     db = await _get_db()
     try:
-        await db.execute("UPDATE jobs SET description = $1 WHERE id = $2", description, job_id)
+        if applicants is not None or applicants_raw is not None:
+            await db.execute(
+                """
+                UPDATE jobs 
+                   SET description = $1, 
+                       applicants = $2, 
+                       applicants_raw = $3 
+                 WHERE id = $4
+                """, 
+                description, applicants, applicants_raw, job_id
+            )
+        else:
+            await db.execute("UPDATE jobs SET description = $1 WHERE id = $2", description, job_id)
     finally:
         await db.close()
 
@@ -333,7 +347,7 @@ async def get_all_jobs(
             query_sql = (
                 f"SELECT jobs.id, jobs.title, jobs.company, jobs.location, jobs.salary, jobs.url, jobs.source, jobs.description, "
                 f"jobs.snippet, jobs.tags, jobs.match_score, jobs.scrape_count, jobs.consecutive_misses, "
-                f"jobs.date_found, jobs.date_posted, jobs.last_seen, jobs.is_active, "
+                f"jobs.date_found, jobs.date_posted, jobs.last_seen, jobs.is_active, jobs.applicants, jobs.applicants_raw, "
                 f"COALESCE(uj.status, 'new') as status, "
                 f"COALESCE(uj.notified, 0) as notified, "
                 f"CASE WHEN uj.job_id IS NULL THEN 1 ELSE 0 END as is_new "

@@ -97,6 +97,12 @@ export default function JobCard({
             {job.company || 'Unknown Company'}
             {job.location && <span className="sub-dot">•</span>}
             {job.location && <span className="location-text">{job.location}</span>}
+            {job.applicants_raw && <span className="sub-dot">•</span>}
+            {job.applicants_raw && (
+              <span className="applicants-badge-text" style={{ color: 'var(--color-primary-light, #38bdf8)', fontWeight: '500' }}>
+                👥 {job.applicants_raw}
+              </span>
+            )}
           </div>
 
           {/* Tags / Metrics at bottom */}
