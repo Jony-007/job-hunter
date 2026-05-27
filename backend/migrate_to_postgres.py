@@ -1,9 +1,8 @@
 import os
 import sqlite3
 import psycopg2
-
 SQLITE_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jobs.db")
-POSTGRES_URL = "postgresql://neondb_owner:npg_w7L8rCIBVXAJ@ep-lingering-frost-aq86xl1u.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require"
+POSTGRES_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or "postgresql://user:password@localhost:5432/neondb?sslmode=require"
 
 def migrate():
     print(f"Connecting to SQLite: {SQLITE_DB}")
