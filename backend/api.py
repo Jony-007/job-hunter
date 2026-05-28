@@ -1470,46 +1470,250 @@ async def tailor_resume_docx(
     new_score = result.get("new_score", 0)
     analysis = result.get("analysis", "")
 
-    # 4. Profile the original document to capture and copy layout, formatting, and styles
-    font_sizes = []
-    paragraphs_to_profile = []
-    
-    # Analyze the original elements and find the first major section heading
+    # ---------------------------------------------------------------------------
+    # 4. BUILD DOCUMENT FROM SCRATCH (Claude's docx.js approach ported to python-docx)
+    # ---------------------------------------------------------------------------
+    # Instead of splicing into the existing document, we build a brand-new
+    # Document() with absolute control over every element — identical to
+    # how Claude's Node.js docx.js script works.
+    # ---------------------------------------------------------------------------
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph as DocxParagraph
+    from docx.table import Table as DocxTable
+
+    # -- Colour constants (match Claude's script exactly) --
+    ACCENT = RGBColor(0x1F, 0x5C, 0x8B)
+    GRAY   = RGBColor(0x44, 0x44, 0x44)
+    BLACK  = RGBColor(0x11, 0x11, 0x11)
+    LIGHT  = RGBColor(0xAA, 0xAA, 0xAA)
+
+    # -- 4a. Extract name + contact lines from the ORIGINAL document --
     common_headings = [
-        "summary", "experience", "education", "skills", "projects", 
+        "summary", "experience", "education", "skills", "projects",
         "objective", "work history", "employment", "professional experience",
         "technical skills", "work experience", "about me", "certifications",
         "profile"
     ]
-    
-    first_heading_el = None
-    from docx.text.paragraph import Paragraph
-    from docx.table import Table
-    
-    for child in list(doc.element.body):
-        name = child.tag.split('}')[-1]
-        if name == 'p':
-            p = Paragraph(child, doc)
-            text_clean = p.text.strip().lower()
-            if not text_clean:
-                continue
-            
-            for run in p.runs:
-                if run.font.size:
-                    font_sizes.append(run.font.size.pt)
-            paragraphs_to_profile.append(p)
-            
-            if first_heading_el is None:
-                is_heading = False
-                if p.style and p.style.name.startswith('Heading'):
-                    is_heading = True
-                elif len(text_clean) < 40 and any(h in text_clean for h in common_headings):
-                    is_heading = True
-                
-                if is_heading:
-                    first_heading_el = child
 
-    avg_font_size = sum(font_sizes) / len(font_sizes) if font_sizes else 11.0
+    original_name = ""
+    original_contact_lines = []
+
+    for child in doc.element.body:
+        tag_name = child.tag.split('}')[-1]
+        if tag_name == 'p':
+            p_obj = DocxParagraph(child, doc)
+            text = p_obj.text.strip()
+            if not text:
+                continue
+            text_lower = text.lower()
+
+            # Stop at the first section heading
+            is_heading = False
+            if p_obj.style and p_obj.style.name.startswith('Heading'):
+                is_heading = True
+            elif len(text) < 50 and any(h in text_lower for h in common_headings):
+                is_heading = True
+            if is_heading:
+                break
+
+            if not original_name:
+                original_name = text
+            else:
+                original_contact_lines.append(text)
+
+    # -- 4b. Create a brand-new Document --
+    new_doc = Document()
+
+    # -- 4c. Configure page layout (US Letter, Claude's exact margins) --
+    for section in new_doc.sections:
+        section.page_width  = Inches(8.5)      # 12240 dxa
+        section.page_height = Inches(11.0)     # 15840 dxa
+        section.top_margin    = Inches(0.6)    # 864 dxa
+        section.bottom_margin = Inches(0.6)
+        section.left_margin   = Inches(0.75)   # 1080 dxa
+        section.right_margin  = Inches(0.75)
+
+    # -- 4d. Set document-wide default font to Arial --
+    doc_style = new_doc.styles['Normal']
+    doc_style.font.name = 'Arial'
+    doc_style.font.size = Pt(9)   # 18 half-points = 9 pt
+    doc_style.font.color.rgb = GRAY
+
+    # -- 4e. Configure native bullet numbering (matching Claude's numbering config) --
+    # This creates a real Word numbered-list definition with a bullet character,
+    # exactly like Claude's:  numbering: { config: [{ reference: "bullets", ... }] }
+    numbering_part = new_doc.part.numbering_part
+    numbering_xml = numbering_part._element
+
+    abstract_num = OxmlElement('w:abstractNum')
+    abstract_num.set(qn('w:abstractNumId'), '10')
+    nsid = OxmlElement('w:nsid')
+    nsid.set(qn('w:val'), '2B3C4D5E')
+    abstract_num.append(nsid)
+    multi = OxmlElement('w:multiLevelType')
+    multi.set(qn('w:val'), 'hybridMultilevel')
+    abstract_num.append(multi)
+
+    lvl = OxmlElement('w:lvl')
+    lvl.set(qn('w:ilvl'), '0')
+    start_el = OxmlElement('w:start')
+    start_el.set(qn('w:val'), '1')
+    lvl.append(start_el)
+    numFmt = OxmlElement('w:numFmt')
+    numFmt.set(qn('w:val'), 'bullet')
+    lvl.append(numFmt)
+    lvlText = OxmlElement('w:lvlText')
+    lvlText.set(qn('w:val'), '\u2022')  # bullet character •
+    lvl.append(lvlText)
+    lvlJc = OxmlElement('w:lvlJc')
+    lvlJc.set(qn('w:val'), 'left')
+    lvl.append(lvlJc)
+    pPr_lvl = OxmlElement('w:pPr')
+    ind_lvl = OxmlElement('w:ind')
+    ind_lvl.set(qn('w:left'), '360')     # 360 dxa = 0.25 in
+    ind_lvl.set(qn('w:hanging'), '240')  # 240 dxa = 0.167 in
+    pPr_lvl.append(ind_lvl)
+    lvl.append(pPr_lvl)
+    rPr_lvl = OxmlElement('w:rPr')
+    rFonts_lvl = OxmlElement('w:rFonts')
+    rFonts_lvl.set(qn('w:ascii'), 'Symbol')
+    rFonts_lvl.set(qn('w:hAnsi'), 'Symbol')
+    rFonts_lvl.set(qn('w:hint'), 'default')
+    rPr_lvl.append(rFonts_lvl)
+    lvl.append(rPr_lvl)
+    abstract_num.append(lvl)
+
+    # Insert abstractNum BEFORE any existing <w:num> elements
+    first_num = numbering_xml.find(qn('w:num'))
+    if first_num is not None:
+        numbering_xml.insert(list(numbering_xml).index(first_num), abstract_num)
+    else:
+        numbering_xml.append(abstract_num)
+
+    num_el = OxmlElement('w:num')
+    num_el.set(qn('w:numId'), '10')
+    abs_id = OxmlElement('w:abstractNumId')
+    abs_id.set(qn('w:val'), '10')
+    num_el.append(abs_id)
+    numbering_xml.append(num_el)
+
+    # ======================================================================
+    # Helper functions (match Claude's r(), sectionHeader(), jobHeader(), etc.)
+    # ======================================================================
+
+    def _force_arial(run):
+        """Force Arial via direct XML rFonts override on a run."""
+        run.font.name = "Arial"
+        rPr = run._r.get_or_add_rPr()
+        for old in rPr.findall(qn('w:rFonts')):
+            rPr.remove(old)
+        rFonts = OxmlElement('w:rFonts')
+        rFonts.set(qn('w:ascii'), 'Arial')
+        rFonts.set(qn('w:hAnsi'), 'Arial')
+        rFonts.set(qn('w:cs'), 'Arial')
+        rPr.append(rFonts)
+
+    def r(p, text, size_pt=9, bold=False, italic=False, color=GRAY):
+        """Add a styled run — mirrors Claude's r() helper exactly."""
+        run = p.add_run(text)
+        run.font.size = Pt(size_pt)
+        run.bold = bold
+        run.italic = italic
+        run.font.color.rgb = color
+        _force_arial(run)
+        return run
+
+    def section_header(text):
+        """SECTION HEADER with bottom border — mirrors Claude's sectionHeader()."""
+        p = new_doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(6)   # 120 dxa
+        p.paragraph_format.space_after  = Pt(2)   # 40 dxa
+        p.paragraph_format.keep_with_next = True
+        p.paragraph_format.line_spacing = 1.0
+
+        # Native bottom border in ACCENT colour
+        pPr = p._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single')
+        bottom.set(qn('w:sz'), '6')       # 6 × 1/8 pt = 3/4 pt
+        bottom.set(qn('w:space'), '2')     # 4 dxa spacing
+        bottom.set(qn('w:color'), '1F5C8B')
+        pBdr.append(bottom)
+        pPr.append(pBdr)
+
+        r(p, text.upper(), size_pt=9.5, bold=True, color=ACCENT)
+        return p
+
+    def job_header(title, company, dates):
+        """Job header with right-aligned dates — mirrors Claude's jobHeader()."""
+        from docx.enum.text import WD_TAB_ALIGNMENT
+        p = new_doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(4)    # 80 dxa
+        p.paragraph_format.space_after  = Pt(0)
+        p.paragraph_format.keep_with_next = True
+        p.paragraph_format.line_spacing = 1.0
+
+        # Right-tab at 9360 dxa (6.5 in) — matches Claude's tabStops
+        p.paragraph_format.tab_stops.add_tab_stop(
+            Inches(6.5), alignment=WD_TAB_ALIGNMENT.RIGHT
+        )
+
+        r(p, title,        size_pt=10,  bold=True,  color=BLACK)
+        r(p, "  |  ",      size_pt=10,  bold=False, color=LIGHT)
+        r(p, company,      size_pt=10,  bold=True,  color=ACCENT)
+        r(p, "\t",         size_pt=10,  bold=False, color=GRAY)
+        r(p, dates,        size_pt=9.5, bold=False, color=GRAY)
+        return p
+
+    def bullet_paragraph(text):
+        """Bullet point using native Word numbering — mirrors Claude's bullet approach.
+        
+        Never uses a unicode bullet character directly as a TextRun.
+        Instead references the numbering definition we created above (numId=10).
+        """
+        p = new_doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0.9)  # 18 dxa
+        p.paragraph_format.space_after  = Pt(0.9)  # 18 dxa
+        p.paragraph_format.line_spacing = 1.05
+
+        # Attach to our numbering definition (level 0)
+        pPr = p._p.get_or_add_pPr()
+        numPr = OxmlElement('w:numPr')
+        ilvl = OxmlElement('w:ilvl')
+        ilvl.set(qn('w:val'), '0')
+        numPr.append(ilvl)
+        numId = OxmlElement('w:numId')
+        numId.set(qn('w:val'), '10')
+        numPr.append(numId)
+        pPr.append(numPr)
+
+        _add_formatted_runs(p, text)
+        return p
+
+    def _add_formatted_runs(p, text, size_pt=9, default_color=GRAY):
+        """Parse markdown **bold** and *italic* into properly styled runs."""
+        text = text.replace('\r', '').replace('\n', ' ').strip()
+        parts = re.split(r'(\*\*.*?\*\*|\*.*?\*)', text)
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith('**') and part.endswith('**'):
+                r(p, part[2:-2], size_pt=size_pt, bold=True, color=BLACK)
+            elif part.startswith('*') and part.endswith('*'):
+                r(p, part[1:-1], size_pt=size_pt, italic=True, color=default_color)
+            else:
+                r(p, part, size_pt=size_pt, bold=False, color=default_color)
+
+    def body_paragraph(text, size_pt=9):
+        """Regular body paragraph — mirrors Claude's normal paragraph spacing."""
+        p = new_doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(2)   # 40 dxa
+        p.paragraph_format.space_after  = Pt(2)   # 40 dxa
+        p.paragraph_format.line_spacing = 1.05
+        _add_formatted_runs(p, text, size_pt=size_pt)
+        return p
 
     def sanitize_bullet_text(text):
         cleaned = text.strip()
@@ -1517,541 +1721,160 @@ async def tailor_resume_docx(
             cleaned = cleaned[1:].strip()
         return cleaned
 
-    def extract_p_format(p):
-        fmt = {
-            'text': p.text,
-            'alignment': p.alignment,
-            'space_before': p.paragraph_format.space_before,
-            'space_after': p.paragraph_format.space_after,
-            'line_spacing': p.paragraph_format.line_spacing,
-            'left_indent': p.paragraph_format.left_indent,
-            'right_indent': p.paragraph_format.right_indent,
-            'keep_with_next': p.paragraph_format.keep_with_next,
-            'font_name': None,
-            'font_size': None,
-            'font_color': None,
-            'bold': None,
-            'italic': None,
-            'underline': None,
-            'style': p.style.name if p.style else None
-        }
-        if p.runs:
-            for run in p.runs:
-                if run.font.name:
-                    fmt['font_name'] = run.font.name
-                if run.font.size:
-                    fmt['font_size'] = run.font.size
-                if run.font.color and run.font.color.rgb:
-                    fmt['font_color'] = run.font.color.rgb
-                if run.bold is not None:
-                    fmt['bold'] = run.bold
-                if run.italic is not None:
-                    fmt['italic'] = run.italic
-                if run.underline is not None:
-                    fmt['underline'] = run.underline
-            
-            # Fallback to first run properties if still None
-            run = p.runs[0]
-            if not fmt['font_name']:
-                fmt['font_name'] = run.font.name
-            if not fmt['font_size']:
-                fmt['font_size'] = run.font.size
-            if not fmt['font_color'] and run.font.color and run.font.color.rgb:
-                fmt['font_color'] = run.font.color.rgb
-            if fmt['bold'] is None:
-                fmt['bold'] = run.bold
-            if fmt['italic'] is None:
-                fmt['italic'] = run.italic
-            if fmt['underline'] is None:
-                fmt['underline'] = run.underline
-        return fmt
+    # ======================================================================
+    # 5. Render the resume — Name → Contact → AI-tailored sections
+    # ======================================================================
 
-    heading1_templates = []
-    heading2_templates = []
-    body_templates = []
-    bullet_templates = []
+    # -- 5a. NAME (large, bold, ACCENT blue) --
+    # Remove the default empty paragraph python-docx adds
+    if new_doc.paragraphs:
+        first_p = new_doc.paragraphs[0]
+        if not first_p.text.strip():
+            first_p._p.getparent().remove(first_p._p)
 
-    for p in paragraphs_to_profile:
-        text_clean = p.text.strip()
-        if not text_clean:
-            continue
-            
-        fmt = extract_p_format(p)
-        
-        is_bullet = False
-        if p.style and (p.style.name.startswith('List') or 'bullet' in p.style.name.lower()):
-            is_bullet = True
-        elif text_clean.startswith(('•', '*', '-', '▪', '◦', '–', '▸', '▫')):
-            is_bullet = True
-            
-        is_heading1 = False
-        is_heading2 = False
-        
-        if not is_bullet:
-            if p.style and (p.style.name == 'Heading 1' or 'heading 1' in p.style.name.lower()):
-                is_heading1 = True
-            elif p.style and (p.style.name == 'Heading 2' or 'heading 2' in p.style.name.lower()):
-                is_heading2 = True
-            elif len(text_clean) < 40:
-                has_large_font = False
-                if fmt['font_size'] and fmt['font_size'].pt > avg_font_size + 1:
-                    has_large_font = True
-                
-                if p.style and p.style.name.startswith('Heading'):
-                    is_heading1 = True
-                elif fmt['bold'] and (text_clean.isupper() or has_large_font):
-                    is_heading1 = True
-                elif fmt['bold']:
-                    is_heading2 = True
-                    
-        if is_bullet:
-            bullet_templates.append(fmt)
-        elif is_heading1:
-            heading1_templates.append(fmt)
-        elif is_heading2:
-            heading2_templates.append(fmt)
-        else:
-            body_templates.append(fmt)
+    p_name = new_doc.add_paragraph()
+    p_name.paragraph_format.space_before = Pt(0)
+    p_name.paragraph_format.space_after  = Pt(1)  # 20 dxa
+    p_name.paragraph_format.line_spacing = 1.0
 
-    # 5. Define high-fidelity professional Arial formatting defaults (Claude's parameters matched)
-    body_fmt = {
-        'alignment': None,
-        'space_before': Pt(2), # 40 dxa = 2 pt
-        'space_after': Pt(2),  # 40 dxa = 2 pt
-        'line_spacing': 1.05,
-        'left_indent': Pt(0),
-        'right_indent': Pt(0),
-        'keep_with_next': None,
-        'font_name': 'Arial',
-        'font_size': Pt(9),    # size 18 = 9 pt
-        'font_color': RGBColor(0x44, 0x44, 0x44), # GRAY
-        'bold': False,
-        'italic': False,
-        'underline': False,
-        'style': 'Normal'
-    }
-
-    heading1_fmt = {
-        'alignment': WD_ALIGN_PARAGRAPH.LEFT,
-        'space_before': Pt(6), # 120 dxa = 6 pt
-        'space_after': Pt(2),  # 40 dxa = 2 pt
-        'line_spacing': 1.05,
-        'left_indent': Pt(0),
-        'right_indent': Pt(0),
-        'keep_with_next': True,
-        'font_name': 'Arial',
-        'font_size': Pt(9.5),  # size 19 = 9.5 pt
-        'font_color': RGBColor(0x1F, 0x5C, 0x8B), # ACCENT
-        'bold': True,
-        'italic': False,
-        'underline': False,
-        'style': 'Heading 1'
-    }
-
-    heading2_fmt = {
-        'alignment': WD_ALIGN_PARAGRAPH.LEFT,
-        'space_before': Pt(4), # 80 dxa = 4 pt
-        'space_after': Pt(0),
-        'line_spacing': 1.05,
-        'left_indent': Pt(0),
-        'right_indent': Pt(0),
-        'keep_with_next': True,
-        'font_name': 'Arial',
-        'font_size': Pt(10),   # size 20 = 10 pt
-        'font_color': RGBColor(0x1F, 0x5C, 0x8B), # ACCENT
-        'bold': True,
-        'italic': False,
-        'underline': False,
-        'style': 'Heading 2'
-    }
-
-    bullet_fmt = {
-        'alignment': None,
-        'space_before': Pt(0.9), # 18 dxa = 0.9 pt
-        'space_after': Pt(0.9),  # 18 dxa = 0.9 pt
-        'line_spacing': 1.05,
-        'left_indent': Pt(18),    # 360 dxa
-        'right_indent': Pt(0),
-        'keep_with_next': None,
-        'font_name': 'Arial',
-        'font_size': Pt(9),    # size 18 = 9 pt
-        'font_color': RGBColor(0x44, 0x44, 0x44), # GRAY
-        'bold': False,
-        'italic': False,
-        'underline': False,
-        'style': 'List Bullet'
-    }
-
-    heading1_is_upper = True
-
-    # 6. Delete all original elements in-place after the styled header/contact info
-    body_children = list(doc.element.body)
-    start_delete_idx = None
-    
-    if first_heading_el is not None:
-        try:
-            start_delete_idx = body_children.index(first_heading_el)
-        except ValueError:
-            pass
-            
-    if start_delete_idx is None:
-        # Fallback: keep first 3 paragraphs as header
-        p_count = 0
-        for idx, child in enumerate(body_children):
-            name = child.tag.split('}')[-1]
-            if name == 'p':
-                p = Paragraph(child, doc)
-                if p.text.strip():
-                    p_count += 1
-                    if p_count > 3:
-                        start_delete_idx = idx
-                        break
-                        
-    if start_delete_idx is not None:
-        for child in body_children[start_delete_idx:]:
-            try:
-                child.getparent().remove(child)
-            except Exception:
-                try:
-                    doc.element.body.remove(child)
-                except Exception:
-                    pass
-
-    # 7. Apply formatting and build tailored paragraphs
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-
-    def add_p_border_bottom(p, color_hex="1F5C8B", size=6, space="2"):
-        """Adds a native Microsoft Word bottom border to a paragraph for a premium horizontal rule aesthetic."""
-        pPr = p._p.get_or_add_pPr()
-        pBdr = pPr.find(qn('w:pBdr'))
-        if pBdr is None:
-            pBdr = OxmlElement('w:pBdr')
-            pPr.append(pBdr)
-        
-        # Clear existing bottom border to prevent conflicts
-        existing_bottom = pBdr.find(qn('w:bottom'))
-        if existing_bottom is not None:
-            pBdr.remove(existing_bottom)
-            
-        bottom = OxmlElement('w:bottom')
-        bottom.set(qn('w:val'), 'single')
-        bottom.set(qn('w:sz'), str(size))  # 1/8 pt units: 6 = 3/4 pt
-        bottom.set(qn('w:space'), str(space))    # Spacing from text
-        bottom.set(qn('w:color'), color_hex)
-        pBdr.append(bottom)
-
-    def add_job_header_paragraph(document, title, company, dates):
-        """Adds a premium job header paragraph with right-aligned dates via tab stops."""
-        from docx.enum.text import WD_TAB_ALIGNMENT
-        p = document.add_paragraph()
-        p.paragraph_format.space_before = Pt(4) # 80 dxa = 4 pt
-        p.paragraph_format.space_after = Pt(0)
-        p.paragraph_format.keep_with_next = True
-        
-        # 9360 dxa = 6.5 in. Since left margin is 0.75 in and page width is 8.5 in:
-        # Printable width is 7.0 in. So 6.5 in fits perfectly.
-        p.paragraph_format.tab_stops.add_tab_stop(Inches(6.5), alignment=WD_TAB_ALIGNMENT.RIGHT)
-        
-        def add_run_styled(p, text, size_pt, bold, color_rgb):
-            run = p.add_run(text)
-            run.font.name = "Arial"
-            run.font.size = Pt(size_pt)
-            run.bold = bold
-            if color_rgb:
-                run.font.color.rgb = color_rgb
-            # Force Arial direct font override in XML
-            rPr = run._r.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts')
-            rFonts.set(qn('w:ascii'), "Arial")
-            rFonts.set(qn('w:hAnsi'), "Arial")
-            rPr.append(rFonts)
-            return run
-
-        add_run_styled(p, title.strip(), 10, True, RGBColor(0x11, 0x11, 0x11)) # BLACK
-        if company:
-            add_run_styled(p, "  |  ", 10, False, RGBColor(0xAA, 0xAA, 0xAA)) # separator
-            add_run_styled(p, company.strip(), 10, True, RGBColor(0x1F, 0x5C, 0x8B)) # ACCENT
-        if dates:
-            add_run_styled(p, "\t", 10, False, None) # Tab
-            add_run_styled(p, dates.strip(), 9.5, False, RGBColor(0x44, 0x44, 0x44)) # GRAY
-
-    def optimize_document_tables(document):
-        """Post-processor that centers tables and enforces explicit, proportional widths on tables AND cells
-
-        to prevent layout collapse on Google Docs or older Word editions.
-        """
-        from docx.enum.table import WD_TABLE_ALIGNMENT
-        for table in document.tables:
-            table.alignment = WD_TABLE_ALIGNMENT.CENTER
-            try:
-                section = document.sections[0]
-                avail_width = section.page_width - section.left_margin - section.right_margin
-            except Exception:
-                avail_width = Inches(7.0)
-                
-            total_width_dxa = int(avail_width.inches * 1440)
-            table.width = avail_width
-            
-            for row in table.rows:
-                num_cells = len(row.cells)
-                if num_cells > 0:
-                    cell_width_dxa = int(total_width_dxa / num_cells)
-                    cell_width = Inches(avail_width.inches / num_cells)
-                    for cell in row.cells:
-                        cell.width = cell_width
-                        tcPr = cell._tc.get_or_add_tcPr()
-                        tcW = tcPr.find(qn('w:tcW'))
-                        if tcW is None:
-                            tcW = OxmlElement('w:tcW')
-                            tcPr.append(tcW)
-                        tcW.set(qn('w:w'), str(cell_width_dxa))
-                        tcW.set(qn('w:type'), 'dxa')
-
-    def apply_p_format(p, fmt, is_bullet=False):
-        """Applies consistent, explicit spacing and indent rules to a paragraph to maintain design integrity."""
-        if is_bullet:
-            try:
-                p.style = 'List Bullet'
-            except Exception:
-                pass
-            p.paragraph_format.space_before = Pt(0.9) # 18 dxa
-            p.paragraph_format.space_after = Pt(0.9)  # 18 dxa
-            p.paragraph_format.left_indent = Pt(18)    # 360 dxa
-            p.paragraph_format.first_line_indent = Pt(-12) # -240 dxa
-        else:
-            p.paragraph_format.space_before = Pt(2)   # 40 dxa
-            p.paragraph_format.space_after = Pt(2)    # 40 dxa
-            p.paragraph_format.left_indent = Pt(0)
-            p.paragraph_format.first_line_indent = Pt(0)
-        
-        p.paragraph_format.line_spacing = 1.05
-        p.paragraph_format.right_indent = Pt(0)
-        
-        if fmt.get('alignment') is not None:
-            p.alignment = fmt['alignment']
-        if fmt.get('keep_with_next') is not None:
-            p.paragraph_format.keep_with_next = fmt['keep_with_next']
-
-    def apply_run_format(run, fmt, is_bold=False, is_italic=False, custom_color=None):
-        """Applies run-level font styles, size, bolding, and underlying XML font mappings to avoid browser defaults."""
-        run.font.name = "Arial"
-        # Force Arial direct font override in XML
-        rPr = run._r.get_or_add_rPr()
-        rFonts = OxmlElement('w:rFonts')
-        rFonts.set(qn('w:ascii'), "Arial")
-        rFonts.set(qn('w:hAnsi'), "Arial")
-        rPr.append(rFonts)
-        
-        run.font.size = fmt.get('font_size') if fmt.get('font_size') is not None else Pt(9)
-        
-        if custom_color is not None:
-            run.font.color.rgb = custom_color
-        elif is_bold:
-            run.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
-        else:
-            run.font.color.rgb = RGBColor(0x44, 0x44, 0x44)
-            
-        run.bold = is_bold
-        run.italic = is_italic
-        if fmt.get('underline') is not None:
-            run.underline = fmt['underline']
-
-    def add_tailored_paragraph(document, text_line, fmt, is_bullet=False):
-        """Safely appends a paragraph, stripping raw line endings to prevent \n inside TextRuns."""
-        text_line = text_line.replace('\r', '').replace('\n', ' ').strip()
-        if not text_line:
-            return
-            
-        if is_bullet:
-            try:
-                p = document.add_paragraph(style='List Bullet')
-            except Exception:
-                p = document.add_paragraph()
-        else:
-            p = document.add_paragraph()
-            
-        apply_p_format(p, fmt, is_bullet=is_bullet)
-        
-        parts = re.split(r'(\*\*.*?\*\*|\*.*?\*)', text_line)
-        for part in parts:
-            if not part:
-                continue
-            
-            run_bold = False
-            run_italic = False
-            run_text = part
-            
-            if part.startswith('**') and part.endswith('**'):
-                run_bold = True
-                run_text = part[2:-2]
-            elif part.startswith('*') and part.endswith('*'):
-                run_italic = True
-                run_text = part[1:-1]
-                
-            run = p.add_run(run_text)
-            apply_run_format(run, fmt, is_bold=run_bold, is_italic=run_italic)
-
-    # Clean the tailored markdown to avoid duplicating contact info
+    # Decide the name: if AI markdown starts with # Name, use that; else use original doc
     md_lines = tailored_md.split('\n')
-    start_md_idx = 0
+    ai_name = ""
+    ai_body_start = 0
     for idx, line in enumerate(md_lines):
-        line_clean = line.strip().lower()
-        if line.startswith(('#', '##', '###')):
-            if any(h in line_clean for h in common_headings):
-                start_md_idx = idx
-                break
-                
-    tailored_body_md = "\n".join(md_lines[start_md_idx:])
+        stripped = line.strip()
+        if stripped.startswith('# ') and not stripped.startswith('## '):
+            ai_name = stripped[2:].strip()
+            ai_body_start = idx + 1
+            break
 
-    # Append optimized text line-by-line
-    for raw_line in tailored_body_md.split('\n'):
-        line = raw_line.rstrip()
-        if not line.strip():
-            continue
+    display_name = ai_name if ai_name else original_name
+    r(p_name, display_name, size_pt=24, bold=True, color=ACCENT)
 
-        # Horizontal rule using native paragraph bottom borders for premium appearance
-        if line.strip() in ('---', '***', '___'):
-            p = doc.add_paragraph()
-            p.paragraph_format.space_before = Pt(8)
-            p.paragraph_format.space_after = Pt(8)
-            add_p_border_bottom(p, color_hex="AAAAAA", size=6, space="2")
-            continue
+    # -- 5b. CONTACT LINE (Title | Location | Phone | Email) --
+    # Try to get contact from the AI output first (the line right after # Name)
+    contact_text = ""
+    if ai_body_start < len(md_lines):
+        next_line = md_lines[ai_body_start].strip()
+        if next_line and not next_line.startswith('#'):
+            contact_text = next_line
+            ai_body_start += 1
 
-        # Headings
-        if line.startswith('### '):
-            heading2_text = sanitize_bullet_text(line[4:])
-            if '|' in heading2_text:
-                parts = [pt.strip() for pt in heading2_text.split('|')]
-                title = parts[0].replace('**', '').replace('*', '').strip()
-                company = parts[1].replace('**', '').replace('*', '').strip() if len(parts) > 1 else ""
-                dates = parts[2].replace('**', '').replace('*', '').strip() if len(parts) > 2 else ""
-                add_job_header_paragraph(doc, title, company, dates)
+    if not contact_text and original_contact_lines:
+        contact_text = " | ".join(original_contact_lines)
+
+    if contact_text:
+        p_contact = new_doc.add_paragraph()
+        p_contact.paragraph_format.space_before = Pt(0)
+        p_contact.paragraph_format.space_after  = Pt(3)  # 60 dxa
+        p_contact.paragraph_format.line_spacing = 1.0
+
+        # Split on pipe and style each segment
+        contact_parts = [pt.strip() for pt in contact_text.split('|')]
+        for i, part in enumerate(contact_parts):
+            if i == 0:
+                # Title or first segment — slightly bolder
+                r(p_contact, part, size_pt=10, bold=False, color=BLACK)
             else:
-                add_tailored_paragraph(doc, heading2_text, heading2_fmt, is_bullet=False)
-            continue
-            
-        if line.startswith('## '):
-            heading_text = sanitize_bullet_text(line[3:])
-            if heading1_is_upper:
-                heading_text = heading_text.upper()
-                
-            p = doc.add_paragraph()
-            p.paragraph_format.space_before = Pt(6) # 120 dxa = 6 pt
-            p.paragraph_format.space_after = Pt(2)  # 40 dxa = 2 pt
-            p.paragraph_format.keep_with_next = True
-            
-            add_p_border_bottom(p, color_hex="1F5C8B", size=6, space="2")
-            
-            run = p.add_run(heading_text)
-            run.font.name = "Arial"
-            run.font.size = Pt(9.5) # size 19 = 9.5 pt
-            run.bold = True
-            run.font.color.rgb = RGBColor(0x1F, 0x5C, 0x8B) # ACCENT
-            
-            rPr = run._r.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts')
-            rFonts.set(qn('w:ascii'), "Arial")
-            rFonts.set(qn('w:hAnsi'), "Arial")
-            rPr.append(rFonts)
-            continue
-            
-        if line.startswith('# '):
-            title_text = sanitize_bullet_text(line[2:])
-            p = doc.add_paragraph()
-            p.paragraph_format.space_before = Pt(0)
-            p.paragraph_format.space_after = Pt(1) # 20 dxa = 1 pt
-            
-            run = p.add_run(title_text)
-            run.font.name = "Arial"
-            run.font.size = Pt(24) # size 48 = 24 pt
-            run.bold = True
-            run.font.color.rgb = RGBColor(0x1F, 0x5C, 0x8B) # ACCENT
-            
-            rPr = run._r.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts')
-            rFonts.set(qn('w:ascii'), "Arial")
-            rFonts.set(qn('w:hAnsi'), "Arial")
-            rPr.append(rFonts)
+                r(p_contact, "  |  ", size_pt=9.5, bold=False, color=LIGHT)
+                r(p_contact, part, size_pt=9.5, bold=False, color=GRAY)
+
+    # -- 5c. Skip the header portion of the AI markdown, find first ## section heading --
+    body_start_idx = ai_body_start
+    for idx in range(ai_body_start, len(md_lines)):
+        stripped = md_lines[idx].strip().lower()
+        if md_lines[idx].strip().startswith('## '):
+            if any(h in stripped for h in common_headings):
+                body_start_idx = idx
+                break
+        # Also skip any remaining contact-like lines
+        if not md_lines[idx].strip().startswith('#') and not md_lines[idx].strip():
             continue
 
-        # Bullet points matching broad list headers
-        line_stripped = line.strip()
-        if line_stripped.startswith(('- ', '* ', '• ', '▪ ', '▸ ', '▫ ', '◦ ', '· ', '🔸 ', '– ')):
-            bullet_text = line_stripped
-            for prefix in ('- ', '* ', '• ', '▪ ', '▸ ', '▫ ', '◦ ', '· ', '🔸 ', '– '):
+    # -- 5d. Render AI-tailored body line-by-line --
+    BULLET_PREFIXES = ('- ', '* ', '• ', '▪ ', '▸ ', '▫ ', '◦ ', '· ', '🔸 ', '– ')
+
+    for raw_line in md_lines[body_start_idx:]:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        # Horizontal rule
+        if stripped in ('---', '***', '___'):
+            p = new_doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after  = Pt(4)
+            pPr = p._p.get_or_add_pPr()
+            pBdr = OxmlElement('w:pBdr')
+            bottom = OxmlElement('w:bottom')
+            bottom.set(qn('w:val'), 'single')
+            bottom.set(qn('w:sz'), '6')
+            bottom.set(qn('w:space'), '2')
+            bottom.set(qn('w:color'), 'AAAAAA')
+            pBdr.append(bottom)
+            pPr.append(pBdr)
+            continue
+
+        # ### = Job Header (Title | Company | Dates)
+        if stripped.startswith('### '):
+            raw = stripped[4:].strip()
+            raw = raw.replace('**', '').replace('*', '')
+            if '|' in raw:
+                parts = [pt.strip() for pt in raw.split('|')]
+                title = parts[0] if len(parts) > 0 else ""
+                company = parts[1] if len(parts) > 1 else ""
+                dates = parts[2] if len(parts) > 2 else ""
+                job_header(title, company, dates)
+            else:
+                # Sub-heading without pipes
+                p = new_doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(4)
+                p.paragraph_format.space_after = Pt(1)
+                p.paragraph_format.keep_with_next = True
+                r(p, raw, size_pt=10, bold=True, color=BLACK)
+            continue
+
+        # ## = Section Header (PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, etc.)
+        if stripped.startswith('## '):
+            header_text = stripped[3:].strip()
+            section_header(header_text)
+            continue
+
+        # # = Name (skip — already rendered above)
+        if stripped.startswith('# ') and not stripped.startswith('## '):
+            continue
+
+        # Bullet points
+        is_bullet = any(stripped.startswith(prefix) for prefix in BULLET_PREFIXES)
+        if is_bullet:
+            bullet_text = stripped
+            for prefix in BULLET_PREFIXES:
                 if bullet_text.startswith(prefix):
                     bullet_text = bullet_text[len(prefix):]
                     break
             bullet_text = sanitize_bullet_text(bullet_text)
-            add_tailored_paragraph(doc, bullet_text, bullet_fmt, is_bullet=True)
+            if bullet_text:
+                bullet_paragraph(bullet_text)
             continue
 
-        # Regular body paragraph
-        add_tailored_paragraph(doc, line, body_fmt, is_bullet=False)
+        # Regular body/skills paragraph
+        body_paragraph(stripped)
 
-    # 8. Append styled ATS score footer at the end
-    p_spacer = doc.add_paragraph()
-    p_spacer.paragraph_format.space_before = Pt(12)
-    p_spacer.paragraph_format.space_after = Pt(0)
-    
-    p_score = doc.add_paragraph()
-    p_score.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_score.paragraph_format.space_before = Pt(4)
-    p_score.paragraph_format.space_after = Pt(4)
-    
-    run_label = p_score.add_run(f'ATS Score: {original_score}% → {new_score}%')
-    run_label.font.name = "Arial"
-    run_label.font.size = Pt(9.5)
-    run_label.bold = True
-    run_label.font.color.rgb = RGBColor(0x1F, 0x5C, 0x8B) # ACCENT
-    
-    rPr = run_label._r.get_or_add_rPr()
-    rFonts = OxmlElement('w:rFonts')
-    rFonts.set(qn('w:ascii'), "Arial")
-    rFonts.set(qn('w:hAnsi'), "Arial")
-    rPr.append(rFonts)
-
-    # Explicitly set page dimensions and margins (US Letter) on all sections of the document
-    for section in doc.sections:
-        section.page_width = Inches(8.5)
-        section.page_height = Inches(11.0)
-        section.top_margin = Inches(0.6)
-        section.bottom_margin = Inches(0.6)
-        section.left_margin = Inches(0.75)
-        section.right_margin = Inches(0.75)
-
-    # Optimize all tables in the document (set cell widths explicitly and align center)
-    try:
-        optimize_document_tables(doc)
-    except Exception as e:
-        logger.warning(f"Could not optimize tables: {e}")
-
-    # 10. Post-process the entire document to ensure 100% font consistency with Arial
-    for p in doc.paragraphs:
+    # -- 5e. Post-process: force Arial on every run in the document --
+    for p in new_doc.paragraphs:
         for run in p.runs:
-            run.font.name = "Arial"
-            rPr = run._r.get_or_add_rPr()
-            for f in rPr.findall(qn('w:rFonts')):
-                rPr.remove(f)
-            rFonts = OxmlElement('w:rFonts')
-            rFonts.set(qn('w:ascii'), "Arial")
-            rFonts.set(qn('w:hAnsi'), "Arial")
-            rPr.append(rFonts)
-            
-    for table in doc.tables:
+            _force_arial(run)
+    for table in new_doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for p in cell.paragraphs:
                     for run in p.runs:
-                        run.font.name = "Arial"
-                        rPr = run._r.get_or_add_rPr()
-                        for f in rPr.findall(qn('w:rFonts')):
-                            rPr.remove(f)
-                        rFonts = OxmlElement('w:rFonts')
-                        rFonts.set(qn('w:ascii'), "Arial")
-                        rFonts.set(qn('w:hAnsi'), "Arial")
-                        rPr.append(rFonts)
+                        _force_arial(run)
+
+    # Replace the original doc reference with our fresh build
+    doc = new_doc
 
     # 9. Save and stream the optimized .docx file
     buf = io.BytesIO()
