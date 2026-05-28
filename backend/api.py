@@ -1613,165 +1613,76 @@ async def tailor_resume_docx(
         else:
             body_templates.append(fmt)
 
-    # 5. Define robust fallback formatting defaults (Calibri matched)
-    default_body_fmt = {
+    # 5. Define high-fidelity professional Arial formatting defaults (Claude's parameters matched)
+    body_fmt = {
         'alignment': None,
-        'space_before': Pt(0),
-        'space_after': Pt(2),
+        'space_before': Pt(2), # 40 dxa = 2 pt
+        'space_after': Pt(2),  # 40 dxa = 2 pt
         'line_spacing': 1.05,
         'left_indent': Pt(0),
         'right_indent': Pt(0),
         'keep_with_next': None,
-        'font_name': 'Calibri',
-        'font_size': Pt(10.5),
-        'font_color': RGBColor(0x2D, 0x2D, 0x2D),
+        'font_name': 'Arial',
+        'font_size': Pt(9),    # size 18 = 9 pt
+        'font_color': RGBColor(0x44, 0x44, 0x44), # GRAY
         'bold': False,
         'italic': False,
         'underline': False,
         'style': 'Normal'
     }
 
-    default_heading1_fmt = {
+    heading1_fmt = {
         'alignment': WD_ALIGN_PARAGRAPH.LEFT,
-        'space_before': Pt(8),
-        'space_after': Pt(2.5),
-        'line_spacing': 1.1,
+        'space_before': Pt(6), # 120 dxa = 6 pt
+        'space_after': Pt(2),  # 40 dxa = 2 pt
+        'line_spacing': 1.05,
         'left_indent': Pt(0),
         'right_indent': Pt(0),
         'keep_with_next': True,
-        'font_name': 'Calibri',
-        'font_size': Pt(12),
-        'font_color': RGBColor(0x0A, 0x4D, 0x8C),
+        'font_name': 'Arial',
+        'font_size': Pt(9.5),  # size 19 = 9.5 pt
+        'font_color': RGBColor(0x1F, 0x5C, 0x8B), # ACCENT
         'bold': True,
         'italic': False,
         'underline': False,
         'style': 'Heading 1'
     }
 
-    default_heading2_fmt = {
+    heading2_fmt = {
         'alignment': WD_ALIGN_PARAGRAPH.LEFT,
-        'space_before': Pt(5),
-        'space_after': Pt(2),
+        'space_before': Pt(4), # 80 dxa = 4 pt
+        'space_after': Pt(0),
         'line_spacing': 1.05,
         'left_indent': Pt(0),
         'right_indent': Pt(0),
         'keep_with_next': True,
-        'font_name': 'Calibri',
-        'font_size': Pt(11),
-        'font_color': RGBColor(0x1A, 0x1A, 0x2E),
+        'font_name': 'Arial',
+        'font_size': Pt(10),   # size 20 = 10 pt
+        'font_color': RGBColor(0x1F, 0x5C, 0x8B), # ACCENT
         'bold': True,
         'italic': False,
         'underline': False,
         'style': 'Heading 2'
     }
 
-    default_bullet_fmt = {
+    bullet_fmt = {
         'alignment': None,
-        'space_before': Pt(0),
-        'space_after': Pt(2),
+        'space_before': Pt(0.9), # 18 dxa = 0.9 pt
+        'space_after': Pt(0.9),  # 18 dxa = 0.9 pt
         'line_spacing': 1.05,
-        'left_indent': Inches(0.2),
-        'right_indent': None,
+        'left_indent': Pt(18),    # 360 dxa
+        'right_indent': Pt(0),
         'keep_with_next': None,
-        'font_name': 'Calibri',
-        'font_size': Pt(10.5),
-        'font_color': RGBColor(0x2D, 0x2D, 0x2D),
+        'font_name': 'Arial',
+        'font_size': Pt(9),    # size 18 = 9 pt
+        'font_color': RGBColor(0x44, 0x44, 0x44), # GRAY
         'bold': False,
         'italic': False,
         'underline': False,
         'style': 'List Bullet'
     }
 
-    def merge_formats(templates, default):
-        if not templates:
-            return default
-        template = templates[0]
-        merged = default.copy()
-        for k, v in template.items():
-            if v is not None:
-                merged[k] = v
-        return merged
-
-    body_fmt = merge_formats(body_templates, default_body_fmt)
-    heading1_fmt = merge_formats(heading1_templates, default_heading1_fmt)
-    heading2_fmt = merge_formats(heading2_templates, default_heading2_fmt)
-    bullet_fmt = merge_formats(bullet_templates, default_bullet_fmt)
-
-    # Clean / sanitize and cap spacing values for perfect layout density
-    def sanitize_and_cap_format(fmt, role):
-        # Cap font size to professional resume ranges
-        if fmt.get('font_size'):
-            try:
-                pt_size = fmt['font_size'].pt
-                if role in ('body', 'bullet'):
-                    if pt_size < 8.0 or pt_size > 12.0:
-                        fmt['font_size'] = Pt(10.0)
-                elif role == 'heading1':
-                    if pt_size < 11.0 or pt_size > 16.0:
-                        fmt['font_size'] = Pt(13.0)
-                elif role == 'heading2':
-                    if pt_size < 9.5 or pt_size > 13.0:
-                        fmt['font_size'] = Pt(11.0)
-            except Exception:
-                pass
-
-        # Fix paragraph spacing (space_before and space_after) to prevent ballooning
-        if role == 'body':
-            fmt['space_before'] = Pt(0)
-            if fmt.get('space_after') is None or fmt['space_after'].pt > 4.0:
-                fmt['space_after'] = Pt(2)
-            if fmt.get('line_spacing') is None or (isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] > 1.2) or (not isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] is not None and fmt['line_spacing'].pt > 14.0):
-                fmt['line_spacing'] = 1.05
-            fmt['left_indent'] = Pt(0)
-            fmt['right_indent'] = Pt(0)
-            
-        elif role == 'bullet':
-            fmt['space_before'] = Pt(0)
-            if fmt.get('space_after') is None or fmt['space_after'].pt > 3.0:
-                fmt['space_after'] = Pt(2)
-            if fmt.get('line_spacing') is None or (isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] > 1.2) or (not isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] is not None and fmt['line_spacing'].pt > 14.0):
-                fmt['line_spacing'] = 1.05
-            if fmt.get('left_indent') is None or fmt['left_indent'].inches > 0.4:
-                fmt['left_indent'] = Inches(0.2)
-            fmt['right_indent'] = Pt(0)
-            
-        elif role == 'heading1':
-            if fmt.get('space_before') is None or fmt['space_before'].pt > 12.0:
-                fmt['space_before'] = Pt(8)
-            if fmt.get('space_after') is None or fmt['space_after'].pt > 4.0:
-                fmt['space_after'] = Pt(2.5)
-            if fmt.get('line_spacing') is None or (isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] > 1.25):
-                fmt['line_spacing'] = 1.1
-            fmt['left_indent'] = Pt(0)
-            fmt['right_indent'] = Pt(0)
-            fmt['alignment'] = WD_ALIGN_PARAGRAPH.LEFT
-            
-        elif role == 'heading2':
-            if fmt.get('space_before') is None or fmt['space_before'].pt > 8.0:
-                fmt['space_before'] = Pt(5)
-            if fmt.get('space_after') is None or fmt['space_after'].pt > 3.0:
-                fmt['space_after'] = Pt(2)
-            if fmt.get('line_spacing') is None or (isinstance(fmt['line_spacing'], float) and fmt['line_spacing'] > 1.2):
-                fmt['line_spacing'] = 1.05
-            fmt['left_indent'] = Pt(0)
-            fmt['right_indent'] = Pt(0)
-            fmt['alignment'] = WD_ALIGN_PARAGRAPH.LEFT
-            
-        return fmt
-
-    body_fmt = sanitize_and_cap_format(body_fmt, 'body')
-    heading1_fmt = sanitize_and_cap_format(heading1_fmt, 'heading1')
-    heading2_fmt = sanitize_and_cap_format(heading2_fmt, 'heading2')
-    bullet_fmt = sanitize_and_cap_format(bullet_fmt, 'bullet')
-
-    # Detect if the template headings were uppercase in the original document
-    heading1_is_upper = False
-    for t in heading1_templates:
-        t_text = t.get('text', '').strip()
-        if t_text:
-            if t_text.isupper():
-                heading1_is_upper = True
-                break
+    heading1_is_upper = True
 
     # 6. Delete all original elements in-place after the styled header/contact info
     body_children = list(doc.element.body)
@@ -1810,7 +1721,7 @@ async def tailor_resume_docx(
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
-    def add_p_border_bottom(p, color_hex="BBBBBB", size=6):
+    def add_p_border_bottom(p, color_hex="1F5C8B", size=6, space="2"):
         """Adds a native Microsoft Word bottom border to a paragraph for a premium horizontal rule aesthetic."""
         pPr = p._p.get_or_add_pPr()
         pBdr = pPr.find(qn('w:pBdr'))
@@ -1826,9 +1737,44 @@ async def tailor_resume_docx(
         bottom = OxmlElement('w:bottom')
         bottom.set(qn('w:val'), 'single')
         bottom.set(qn('w:sz'), str(size))  # 1/8 pt units: 6 = 3/4 pt
-        bottom.set(qn('w:space'), '4')    # Spacing from text
+        bottom.set(qn('w:space'), str(space))    # Spacing from text
         bottom.set(qn('w:color'), color_hex)
         pBdr.append(bottom)
+
+    def add_job_header_paragraph(document, title, company, dates):
+        """Adds a premium job header paragraph with right-aligned dates via tab stops."""
+        from docx.enum.text import WD_TAB_ALIGNMENT
+        p = document.add_paragraph()
+        p.paragraph_format.space_before = Pt(4) # 80 dxa = 4 pt
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.keep_with_next = True
+        
+        # 9360 dxa = 6.5 in. Since left margin is 0.75 in and page width is 8.5 in:
+        # Printable width is 7.0 in. So 6.5 in fits perfectly.
+        p.paragraph_format.tab_stops.add_tab_stop(Inches(6.5), alignment=WD_TAB_ALIGNMENT.RIGHT)
+        
+        def add_run_styled(p, text, size_pt, bold, color_rgb):
+            run = p.add_run(text)
+            run.font.name = "Arial"
+            run.font.size = Pt(size_pt)
+            run.bold = bold
+            if color_rgb:
+                run.font.color.rgb = color_rgb
+            # Force Arial direct font override in XML
+            rPr = run._r.get_or_add_rPr()
+            rFonts = OxmlElement('w:rFonts')
+            rFonts.set(qn('w:ascii'), "Arial")
+            rFonts.set(qn('w:hAnsi'), "Arial")
+            rPr.append(rFonts)
+            return run
+
+        add_run_styled(p, title.strip(), 10, True, RGBColor(0x11, 0x11, 0x11)) # BLACK
+        if company:
+            add_run_styled(p, "  |  ", 10, False, RGBColor(0xAA, 0xAA, 0xAA)) # separator
+            add_run_styled(p, company.strip(), 10, True, RGBColor(0x1F, 0x5C, 0x8B)) # ACCENT
+        if dates:
+            add_run_styled(p, "\t", 10, False, None) # Tab
+            add_run_styled(p, dates.strip(), 9.5, False, RGBColor(0x44, 0x44, 0x44)) # GRAY
 
     def optimize_document_tables(document):
         """Post-processor that centers tables and enforces explicit, proportional widths on tables AND cells
@@ -1869,58 +1815,43 @@ async def tailor_resume_docx(
                 p.style = 'List Bullet'
             except Exception:
                 pass
+            p.paragraph_format.space_before = Pt(0.9) # 18 dxa
+            p.paragraph_format.space_after = Pt(0.9)  # 18 dxa
+            p.paragraph_format.left_indent = Pt(18)    # 360 dxa
+            p.paragraph_format.first_line_indent = Pt(-12) # -240 dxa
         else:
-            if fmt.get('style') is not None:
-                try:
-                    p.style = fmt['style']
-                except Exception:
-                    pass
-
+            p.paragraph_format.space_before = Pt(2)   # 40 dxa
+            p.paragraph_format.space_after = Pt(2)    # 40 dxa
+            p.paragraph_format.left_indent = Pt(0)
+            p.paragraph_format.first_line_indent = Pt(0)
+        
+        p.paragraph_format.line_spacing = 1.05
+        p.paragraph_format.right_indent = Pt(0)
+        
         if fmt.get('alignment') is not None:
             p.alignment = fmt['alignment']
-            
-        # Guarantee explicit spacing on every paragraph to prevent Word default balloons
-        p.paragraph_format.space_before = fmt.get('space_before') if fmt.get('space_before') is not None else Pt(0)
-        p.paragraph_format.space_after = fmt.get('space_after') if fmt.get('space_after') is not None else Pt(2)
-        
-        if fmt.get('line_spacing') is not None:
-            p.paragraph_format.line_spacing = fmt['line_spacing']
-        else:
-            p.paragraph_format.line_spacing = 1.05
-            
-        if is_bullet:
-            # Force bullet layout hanging indents explicitly for premium tight layout
-            p.paragraph_format.left_indent = Inches(0.25)
-            p.paragraph_format.first_line_indent = Inches(-0.25)
-        else:
-            if fmt.get('left_indent') is not None:
-                p.paragraph_format.left_indent = fmt['left_indent']
-            else:
-                p.paragraph_format.left_indent = Pt(0)
-                
-        if fmt.get('right_indent') is not None:
-            p.paragraph_format.right_indent = fmt['right_indent']
-        else:
-            p.paragraph_format.right_indent = Pt(0)
-            
         if fmt.get('keep_with_next') is not None:
             p.paragraph_format.keep_with_next = fmt['keep_with_next']
 
-    def apply_run_format(run, fmt, is_bold=False, is_italic=False):
+    def apply_run_format(run, fmt, is_bold=False, is_italic=False, custom_color=None):
         """Applies run-level font styles, size, bolding, and underlying XML font mappings to avoid browser defaults."""
-        if fmt.get('font_name') is not None:
-            run.font.name = fmt['font_name']
-            # Direct font overrides in the underlying Word XML
-            rPr = run._r.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts')
-            rFonts.set(qn('w:ascii'), fmt['font_name'])
-            rFonts.set(qn('w:hAnsi'), fmt['font_name'])
-            rPr.append(rFonts)
+        run.font.name = "Arial"
+        # Force Arial direct font override in XML
+        rPr = run._r.get_or_add_rPr()
+        rFonts = OxmlElement('w:rFonts')
+        rFonts.set(qn('w:ascii'), "Arial")
+        rFonts.set(qn('w:hAnsi'), "Arial")
+        rPr.append(rFonts)
+        
+        run.font.size = fmt.get('font_size') if fmt.get('font_size') is not None else Pt(9)
+        
+        if custom_color is not None:
+            run.font.color.rgb = custom_color
+        elif is_bold:
+            run.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
+        else:
+            run.font.color.rgb = RGBColor(0x44, 0x44, 0x44)
             
-        if fmt.get('font_size') is not None:
-            run.font.size = fmt['font_size']
-        if fmt.get('font_color') is not None:
-            run.font.color.rgb = fmt['font_color']
         run.bold = is_bold
         run.italic = is_italic
         if fmt.get('underline') is not None:
@@ -1928,8 +1859,10 @@ async def tailor_resume_docx(
 
     def add_tailored_paragraph(document, text_line, fmt, is_bullet=False):
         """Safely appends a paragraph, stripping raw line endings to prevent \n inside TextRuns."""
-        text_line = text_line.replace('\r', '').replace('\n', ' ')
-        
+        text_line = text_line.replace('\r', '').replace('\n', ' ').strip()
+        if not text_line:
+            return
+            
         if is_bullet:
             try:
                 p = document.add_paragraph(style='List Bullet')
@@ -1945,8 +1878,8 @@ async def tailor_resume_docx(
             if not part:
                 continue
             
-            run_bold = fmt['bold']
-            run_italic = fmt['italic']
+            run_bold = False
+            run_italic = False
             run_text = part
             
             if part.startswith('**') and part.endswith('**'):
@@ -1982,25 +1915,64 @@ async def tailor_resume_docx(
             p = doc.add_paragraph()
             p.paragraph_format.space_before = Pt(8)
             p.paragraph_format.space_after = Pt(8)
-            add_p_border_bottom(p, color_hex="BBBBBB", size=6)
+            add_p_border_bottom(p, color_hex="AAAAAA", size=6, space="2")
             continue
 
         # Headings
         if line.startswith('### '):
             heading2_text = sanitize_bullet_text(line[4:])
-            add_tailored_paragraph(doc, heading2_text, heading2_fmt, is_bullet=False)
+            if '|' in heading2_text:
+                parts = [pt.strip() for pt in heading2_text.split('|')]
+                title = parts[0].replace('**', '').replace('*', '').strip()
+                company = parts[1].replace('**', '').replace('*', '').strip() if len(parts) > 1 else ""
+                dates = parts[2].replace('**', '').replace('*', '').strip() if len(parts) > 2 else ""
+                add_job_header_paragraph(doc, title, company, dates)
+            else:
+                add_tailored_paragraph(doc, heading2_text, heading2_fmt, is_bullet=False)
             continue
+            
         if line.startswith('## '):
             heading_text = sanitize_bullet_text(line[3:])
             if heading1_is_upper:
                 heading_text = heading_text.upper()
-            add_tailored_paragraph(doc, heading_text, heading1_fmt, is_bullet=False)
+                
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(6) # 120 dxa = 6 pt
+            p.paragraph_format.space_after = Pt(2)  # 40 dxa = 2 pt
+            p.paragraph_format.keep_with_next = True
+            
+            add_p_border_bottom(p, color_hex="1F5C8B", size=6, space="2")
+            
+            run = p.add_run(heading_text)
+            run.font.name = "Arial"
+            run.font.size = Pt(9.5) # size 19 = 9.5 pt
+            run.bold = True
+            run.font.color.rgb = RGBColor(0x1F, 0x5C, 0x8B) # ACCENT
+            
+            rPr = run._r.get_or_add_rPr()
+            rFonts = OxmlElement('w:rFonts')
+            rFonts.set(qn('w:ascii'), "Arial")
+            rFonts.set(qn('w:hAnsi'), "Arial")
+            rPr.append(rFonts)
             continue
+            
         if line.startswith('# '):
-            title_fmt = heading1_fmt.copy()
-            title_fmt['alignment'] = WD_ALIGN_PARAGRAPH.CENTER
             title_text = sanitize_bullet_text(line[2:])
-            add_tailored_paragraph(doc, title_text, title_fmt, is_bullet=False)
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after = Pt(1) # 20 dxa = 1 pt
+            
+            run = p.add_run(title_text)
+            run.font.name = "Arial"
+            run.font.size = Pt(24) # size 48 = 24 pt
+            run.bold = True
+            run.font.color.rgb = RGBColor(0x1F, 0x5C, 0x8B) # ACCENT
+            
+            rPr = run._r.get_or_add_rPr()
+            rFonts = OxmlElement('w:rFonts')
+            rFonts.set(qn('w:ascii'), "Arial")
+            rFonts.set(qn('w:hAnsi'), "Arial")
+            rPr.append(rFonts)
             continue
 
         # Bullet points matching broad list headers
@@ -2019,36 +1991,67 @@ async def tailor_resume_docx(
         add_tailored_paragraph(doc, line, body_fmt, is_bullet=False)
 
     # 8. Append styled ATS score footer at the end
-    doc.add_paragraph()  # spacer
+    p_spacer = doc.add_paragraph()
+    p_spacer.paragraph_format.space_before = Pt(12)
+    p_spacer.paragraph_format.space_after = Pt(0)
+    
     p_score = doc.add_paragraph()
     p_score.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_score.paragraph_format.space_before = Pt(12)
+    p_score.paragraph_format.space_before = Pt(4)
+    p_score.paragraph_format.space_after = Pt(4)
+    
     run_label = p_score.add_run(f'ATS Score: {original_score}% → {new_score}%')
-    run_label.bold = True
-    if body_fmt['font_name']:
-        run_label.font.name = body_fmt['font_name']
+    run_label.font.name = "Arial"
     run_label.font.size = Pt(9.5)
-    run_label.font.color.rgb = RGBColor(0x0A, 0x4D, 0x8C)
+    run_label.bold = True
+    run_label.font.color.rgb = RGBColor(0x1F, 0x5C, 0x8B) # ACCENT
+    
+    rPr = run_label._r.get_or_add_rPr()
+    rFonts = OxmlElement('w:rFonts')
+    rFonts.set(qn('w:ascii'), "Arial")
+    rFonts.set(qn('w:hAnsi'), "Arial")
+    rPr.append(rFonts)
 
-    # Explicitly set page dimensions (US Letter) on all sections of the document to prevent A4 default shifts
+    # Explicitly set page dimensions and margins (US Letter) on all sections of the document
     for section in doc.sections:
-        if section.top_margin is None:
-            section.top_margin = Inches(0.75)
-        if section.bottom_margin is None:
-            section.bottom_margin = Inches(0.75)
-        if section.left_margin is None:
-            section.left_margin = Inches(0.75)
-        if section.right_margin is None:
-            section.right_margin = Inches(0.75)
-            
         section.page_width = Inches(8.5)
         section.page_height = Inches(11.0)
+        section.top_margin = Inches(0.6)
+        section.bottom_margin = Inches(0.6)
+        section.left_margin = Inches(0.75)
+        section.right_margin = Inches(0.75)
 
     # Optimize all tables in the document (set cell widths explicitly and align center)
     try:
         optimize_document_tables(doc)
     except Exception as e:
         logger.warning(f"Could not optimize tables: {e}")
+
+    # 10. Post-process the entire document to ensure 100% font consistency with Arial
+    for p in doc.paragraphs:
+        for run in p.runs:
+            run.font.name = "Arial"
+            rPr = run._r.get_or_add_rPr()
+            for f in rPr.findall(qn('w:rFonts')):
+                rPr.remove(f)
+            rFonts = OxmlElement('w:rFonts')
+            rFonts.set(qn('w:ascii'), "Arial")
+            rFonts.set(qn('w:hAnsi'), "Arial")
+            rPr.append(rFonts)
+            
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.font.name = "Arial"
+                        rPr = run._r.get_or_add_rPr()
+                        for f in rPr.findall(qn('w:rFonts')):
+                            rPr.remove(f)
+                        rFonts = OxmlElement('w:rFonts')
+                        rFonts.set(qn('w:ascii'), "Arial")
+                        rFonts.set(qn('w:hAnsi'), "Arial")
+                        rPr.append(rFonts)
 
     # 9. Save and stream the optimized .docx file
     buf = io.BytesIO()
