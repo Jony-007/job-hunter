@@ -887,7 +887,7 @@ async def ai_filter(body: AIFilterRequest) -> Dict[str, Any]:
             "temperature": 0.0
         }
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(
                     "https://api.deepseek.com/v1/chat/completions",
                     headers=headers,
@@ -1280,7 +1280,7 @@ async def tailor_resume(body: TailorResumeRequest, user: dict = Depends(get_curr
             "temperature": 0.3
         }
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=240.0) as client:
                 resp = await client.post(
                     "https://api.deepseek.com/v1/chat/completions",
                     headers=headers,
