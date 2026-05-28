@@ -878,7 +878,7 @@ async def ai_filter(body: AIFilterRequest) -> Dict[str, Any]:
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4-pro",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
@@ -1271,7 +1271,7 @@ async def tailor_resume(body: TailorResumeRequest, user: dict = Depends(get_curr
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4-pro",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
