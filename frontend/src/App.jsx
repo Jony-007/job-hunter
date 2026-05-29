@@ -428,6 +428,8 @@ export default function App() {
   }, [])
 
   const handleLoginSuccess = useCallback(({ token: newToken, user: newUser }) => {
+    localStorage.setItem('token', newToken)
+    localStorage.setItem('user', JSON.stringify(newUser))
     setToken(newToken)
     setUser(newUser)
     addToast(`Welcome back, ${newUser.name}!`, 'success')
