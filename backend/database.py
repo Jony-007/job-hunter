@@ -313,10 +313,12 @@ async def get_all_jobs(
         params: list = []
         p_idx = 1
 
-        if active_only:
-            if user_id:
-                conditions.append("jobs.is_active = 1 AND uj.is_active = 1")
-            else:
+        if user_id:
+            conditions.append("uj.is_active = 1")
+            if active_only:
+                conditions.append("jobs.is_active = 1")
+        else:
+            if active_only:
                 conditions.append("jobs.is_active = 1")
 
         if user_id:
@@ -570,7 +572,7 @@ async def get_stats(user_id: str | None = None) -> dict:
                 SELECT uj.status as status, COUNT(*) as cnt
                 FROM jobs
                 INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1
-                WHERE jobs.is_active = 1 AND uj.is_active = 1
+                WHERE uj.is_active = 1
                 GROUP BY uj.status
                 """,
                 user_id
@@ -585,11 +587,11 @@ async def get_stats(user_id: str | None = None) -> dict:
         # Total active (user-isolated if user_id is provided)
         if user_id:
             total_active = await db.fetchval(
-                "SELECT COUNT(*) FROM jobs INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 WHERE jobs.is_active = 1 AND uj.is_active = 1",
+                "SELECT COUNT(*) FROM jobs INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 WHERE uj.is_active = 1",
                 user_id
             )
             total_inactive = await db.fetchval(
-                "SELECT COUNT(*) FROM jobs INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 WHERE jobs.is_active = 1 AND uj.is_active = 0",
+                "SELECT COUNT(*) FROM jobs INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 WHERE uj.is_active = 0",
                 user_id
             )
         else:
