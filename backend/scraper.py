@@ -881,6 +881,8 @@ async def run_scrape_cycle(trigger_data: dict | None = None) -> None:
         get_new_unnotified,
         mark_notified,
         log_scrape,
+        associate_job_with_user,
+        get_all_users,
     )
     from stealth import get_stealth_context, RateLimiter, COOKIES_PATH
     import urllib.parse
@@ -1009,6 +1011,17 @@ async def run_scrape_cycle(trigger_data: dict | None = None) -> None:
                                     "last_seen": now_iso,
                                 }
                                 await insert_job(job)
+                                
+                                # Associate job with user(s)
+                                user_id = trigger_data.get("user_id") if trigger_data else None
+                                if user_id:
+                                    await associate_job_with_user(job["id"], user_id)
+                                else:
+                                    # Fallback: associate with all users
+                                    all_users = await get_all_users()
+                                    for u in all_users:
+                                        await associate_job_with_user(job["id"], u["id"])
+
                                 source_new += 1
 
                         total_found += len(raw_jobs)
@@ -1053,12 +1066,13 @@ async def run_scrape_cycle(trigger_data: dict | None = None) -> None:
                 await mark_inactive()
 
                 # Desktop notifications for new jobs
-                new_jobs = await get_new_unnotified()
-                if new_jobs:
-                    from notifier import notify_new_jobs
-
-                    notify_new_jobs(new_jobs)
-                    await mark_notified([j["id"] for j in new_jobs])
+                user_id = trigger_data.get("user_id") if trigger_data else None
+                if user_id:
+                    new_jobs = await get_new_unnotified(user_id=user_id)
+                    if new_jobs:
+                        from notifier import notify_new_jobs
+                        notify_new_jobs(new_jobs)
+                        await mark_notified([j["id"] for j in new_jobs], user_id=user_id)
 
                 # Persist cookies on success
                 try:
@@ -1135,9 +1149,20 @@ async def main() -> None:
                     logger.error("Triggered scrape cycle failed: %s", exc, exc_info=True)
             else:
                 try:
-                    await run_scrape_cycle()
+                    from database import get_all_users
+                    users = await get_all_users()
+                    if users:
+                        for u in users:
+                            logger.info("Running automatic background scheduled crawl for user %s (%s)", u["name"], u["id"])
+                            await run_scrape_cycle({
+                                "user_id": u["id"],
+                                "query": u.get("default_query") or "IT Support",
+                                "location": u.get("default_location") or "Regina, SK"
+                            })
+                    else:
+                        await run_scrape_cycle()
                 except Exception as exc:
-                    logger.error("Scrape cycle failed: %s", exc, exc_info=True)
+                    logger.error("Automatic background scheduled scrape cycle failed: %s", exc, exc_info=True)
 
             # Wait ~30 minutes, but poll for trigger every 10 seconds
             for _ in range(SCRAPE_INTERVAL_MINUTES * 6):  # 180 iterations × 10 s = 30 min

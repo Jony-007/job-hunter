@@ -85,6 +85,7 @@ async def init_db() -> None:
                 job_id      TEXT,
                 status      TEXT,
                 notified    INTEGER DEFAULT 0,
+                is_active   INTEGER DEFAULT 1,
                 updated_at  TEXT,
                 PRIMARY KEY (user_id, job_id)
             );
@@ -112,6 +113,7 @@ async def init_db() -> None:
         await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_resume_filename TEXT")
         await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS applicants INTEGER DEFAULT NULL")
         await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS applicants_raw TEXT DEFAULT NULL")
+        await db.execute("ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1")
 
         # Seed schema_version if empty
         row = await db.fetchrow("SELECT COUNT(*) FROM schema_version")
@@ -177,6 +179,25 @@ async def insert_job(job: dict) -> None:
     except Exception:
         logger.exception("Failed to insert job %s", job.get("id"))
         raise
+    finally:
+        await db.close()
+
+
+async def associate_job_with_user(job_id: str, user_id: str, status: str = "new") -> None:
+    """Associate a job with a specific user in user_jobs."""
+    db = await _get_db()
+    try:
+        await db.execute(
+            """
+            INSERT INTO user_jobs (user_id, job_id, status, notified, is_active, updated_at)
+            VALUES ($1, $2, $3, 0, 1, $4)
+            ON CONFLICT (user_id, job_id) DO NOTHING
+            """,
+            user_id,
+            job_id,
+            status,
+            _utcnow_iso()
+        )
     finally:
         await db.close()
 
@@ -284,7 +305,7 @@ async def get_all_jobs(
 ) -> dict:
     """Return a paginated dict: {jobs, total, offset, limit, has_more}.
 
-    If user_id is provided, includes the user's specific status overrides.
+    If user_id is provided, includes and restricts to the user's specific jobs.
     """
     db = await _get_db()
     try:
@@ -293,19 +314,19 @@ async def get_all_jobs(
         p_idx = 1
 
         if active_only:
-            conditions.append("jobs.is_active = 1")
+            if user_id:
+                conditions.append("jobs.is_active = 1 AND uj.is_active = 1")
+            else:
+                conditions.append("jobs.is_active = 1")
 
         if user_id:
             params.append(user_id)
             p_idx += 1
             # User specific status filtering
             if status:
-                if status == "new":
-                    conditions.append("COALESCE(uj.status, 'new') = 'new'")
-                else:
-                    conditions.append(f"uj.status = ${p_idx}")
-                    params.append(status)
-                    p_idx += 1
+                conditions.append(f"uj.status = ${p_idx}")
+                params.append(status)
+                p_idx += 1
         else:
             if status:
                 conditions.append(f"jobs.status = ${p_idx}")
@@ -326,7 +347,7 @@ async def get_all_jobs(
         if user_id:
             count_sql = (
                 f"SELECT COUNT(*) FROM jobs "
-                f"LEFT JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 "
+                f"INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 "
                 f"{where}"
             )
             total = await db.fetchval(count_sql, *params)
@@ -347,12 +368,12 @@ async def get_all_jobs(
             query_sql = (
                 f"SELECT jobs.id, jobs.title, jobs.company, jobs.location, jobs.salary, jobs.url, jobs.source, jobs.description, "
                 f"jobs.snippet, jobs.tags, jobs.match_score, jobs.scrape_count, jobs.consecutive_misses, "
-                f"jobs.date_found, jobs.date_posted, jobs.last_seen, jobs.is_active, jobs.applicants, jobs.applicants_raw, "
-                f"COALESCE(uj.status, 'new') as status, "
+                f"jobs.date_found, jobs.date_posted, jobs.last_seen, COALESCE(uj.is_active, 1) as is_active, jobs.applicants, jobs.applicants_raw, "
+                f"uj.status as status, "
                 f"COALESCE(uj.notified, 0) as notified, "
-                f"CASE WHEN uj.job_id IS NULL THEN 1 ELSE 0 END as is_new "
+                f"0 as is_new "
                 f"FROM jobs "
-                f"LEFT JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 "
+                f"INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 "
                 f"{where} "
                 f"ORDER BY {sort_order} LIMIT ${limit_idx} OFFSET ${offset_idx}"
             )
@@ -376,27 +397,49 @@ async def get_all_jobs(
         await db.close()
 
 
-async def get_new_unnotified() -> list[dict]:
-    """Return jobs where is_new = 1 AND notified = 0."""
+async def get_new_unnotified(user_id: str | None = None) -> list[dict]:
+    """Return jobs that have not yet been notified (user-isolated if user_id is provided)."""
     db = await _get_db()
     try:
-        rows = await db.fetch(
-            "SELECT * FROM jobs WHERE is_new = 1 AND notified = 0"
-        )
+        if user_id:
+            rows = await db.fetch(
+                """
+                SELECT jobs.*, COALESCE(uj.status, 'new') as status, COALESCE(uj.notified, 0) as notified
+                FROM jobs
+                INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1
+                WHERE COALESCE(uj.notified, 0) = 0 AND COALESCE(uj.status, 'new') = 'new' AND COALESCE(uj.is_active, 1) = 1
+                """,
+                user_id
+            )
+        else:
+            rows = await db.fetch(
+                "SELECT * FROM jobs WHERE is_new = 1 AND notified = 0 AND is_active = 1"
+            )
         return [dict(r) for r in rows]
     finally:
         await db.close()
 
 
-async def mark_notified(ids: list[str]) -> None:
-    """Set notified = 1 for every job id in *ids*."""
+async def mark_notified(ids: list[str], user_id: str | None = None) -> None:
+    """Set notified = 1 for the specified job ids (user-isolated if user_id is provided)."""
     if not ids:
         return
     db = await _get_db()
     try:
-        await db.execute(
-            "UPDATE jobs SET notified = 1 WHERE id = ANY($1)", ids
-        )
+        if user_id:
+            await db.execute(
+                """
+                UPDATE user_jobs
+                   SET notified = 1
+                 WHERE user_id = $1 AND job_id = ANY($2)
+                """,
+                user_id,
+                ids
+            )
+        else:
+            await db.execute(
+                "UPDATE jobs SET notified = 1 WHERE id = ANY($1)", ids
+            )
     finally:
         await db.close()
 
@@ -408,10 +451,11 @@ async def update_status(job_id: str, status: str, user_id: str | None = None) ->
         if user_id:
             await db.execute(
                 """
-                INSERT INTO user_jobs (user_id, job_id, status, notified, updated_at)
-                VALUES ($1, $2, $3, 0, $4)
+                INSERT INTO user_jobs (user_id, job_id, status, notified, is_active, updated_at)
+                VALUES ($1, $2, $3, 0, 1, $4)
                 ON CONFLICT(user_id, job_id) DO UPDATE SET
                     status = EXCLUDED.status,
+                    is_active = EXCLUDED.is_active,
                     updated_at = EXCLUDED.updated_at
                 """,
                 user_id,
@@ -523,11 +567,11 @@ async def get_stats(user_id: str | None = None) -> dict:
         if user_id:
             rows = await db.fetch(
                 """
-                SELECT COALESCE(uj.status, 'new') as status, COUNT(*) as cnt
+                SELECT uj.status as status, COUNT(*) as cnt
                 FROM jobs
-                LEFT JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1
-                WHERE jobs.is_active = 1
-                GROUP BY COALESCE(uj.status, 'new')
+                INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1
+                WHERE jobs.is_active = 1 AND uj.is_active = 1
+                GROUP BY uj.status
                 """,
                 user_id
             )
@@ -538,11 +582,19 @@ async def get_stats(user_id: str | None = None) -> dict:
         
         status_counts = {r["status"]: r["cnt"] for r in rows}
 
-        # Total active
-        total_active = await db.fetchval("SELECT COUNT(*) FROM jobs WHERE is_active = 1")
-
-        # Total inactive
-        total_inactive = await db.fetchval("SELECT COUNT(*) FROM jobs WHERE is_active = 0")
+        # Total active (user-isolated if user_id is provided)
+        if user_id:
+            total_active = await db.fetchval(
+                "SELECT COUNT(*) FROM jobs INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 WHERE jobs.is_active = 1 AND uj.is_active = 1",
+                user_id
+            )
+            total_inactive = await db.fetchval(
+                "SELECT COUNT(*) FROM jobs INNER JOIN user_jobs uj ON jobs.id = uj.job_id AND uj.user_id = $1 WHERE jobs.is_active = 1 AND uj.is_active = 0",
+                user_id
+            )
+        else:
+            total_active = await db.fetchval("SELECT COUNT(*) FROM jobs WHERE is_active = 1")
+            total_inactive = await db.fetchval("SELECT COUNT(*) FROM jobs WHERE is_active = 0")
 
         # Last scrape
         last_scrape_row = await db.fetchrow(
@@ -624,6 +676,36 @@ async def delete_user_resume(user_id: str) -> None:
         await db.execute(
             "UPDATE users SET base_resume_data = NULL, base_resume_filename = NULL WHERE id = $1",
             user_id
+        )
+    finally:
+        await db.close()
+
+
+async def get_all_users() -> list[dict]:
+    """Retrieve all users in the database."""
+    db = await _get_db()
+    try:
+        rows = await db.fetch("SELECT * FROM users")
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def delete_job_for_user(job_id: str, user_id: str) -> None:
+    """Soft-delete a job specifically for a user by setting is_active = 0 in user_jobs."""
+    db = await _get_db()
+    try:
+        await db.execute(
+            """
+            INSERT INTO user_jobs (user_id, job_id, status, notified, is_active, updated_at)
+            VALUES ($1, $2, 'new', 0, 0, $3)
+            ON CONFLICT(user_id, job_id) DO UPDATE SET
+                is_active = 0,
+                updated_at = EXCLUDED.updated_at
+            """,
+            user_id,
+            job_id,
+            _utcnow_iso()
         )
     finally:
         await db.close()

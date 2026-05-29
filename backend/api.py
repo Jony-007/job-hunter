@@ -616,7 +616,8 @@ async def trigger_scrape(body: Optional[ScrapeTriggerRequest] = None, user: dict
         data = {
             "triggered_at": datetime.now(timezone.utc).isoformat(),
             "query": q if q else None,
-            "location": loc if loc else None
+            "location": loc if loc else None,
+            "user_id": user["sub"]
         }
         with open(TRIGGER_PATH, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(data))
@@ -635,18 +636,10 @@ async def trigger_scrape(body: Optional[ScrapeTriggerRequest] = None, user: dict
 # ---------------------------------------------------------------------------
 @app.delete("/jobs/{job_id}")
 async def delete_job(job_id: str, user: dict = Depends(get_current_user)) -> Dict[str, str]:
-    """Soft-delete a job by setting is_active = 0."""
+    """Soft-delete a job specifically for the current user."""
     try:
-        from database import _get_db
-
-        db = await _get_db()
-        try:
-            await db.execute(
-                "UPDATE jobs SET is_active = 0 WHERE id = ?", (job_id,)
-            )
-            await db.commit()
-        finally:
-            await db.close()
+        from database import delete_job_for_user
+        await delete_job_for_user(job_id, user["sub"])
     except Exception as exc:
         logger.exception("Failed to soft-delete job %s", job_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -825,7 +818,7 @@ async def sse_events(request: Request, token: Optional[str] = Query(None)) -> Ev
 
             # --- new jobs ---
             try:
-                new = await get_new_unnotified()
+                new = await get_new_unnotified(user_id=user_id)
                 if new:
                     yield {
                         "event": "new_jobs",
@@ -833,7 +826,7 @@ async def sse_events(request: Request, token: Optional[str] = Query(None)) -> Ev
                             {"jobs": new, "count": len(new)}, default=str
                         ),
                     }
-                    await mark_notified([j["id"] for j in new])
+                    await mark_notified([j["id"] for j in new], user_id=user_id)
             except Exception:
                 logger.warning("SSE: failed to fetch new jobs")
 
